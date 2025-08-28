@@ -1,10 +1,9 @@
-"use strict";
 
 import { getCssPrefix } from "@runtime/runner/legacy-features";
-import { chainOrSuspend, pyCallOrSuspend, pyFalse, pyNone, pyStr, pyTrue } from "@Sk";
-import {getFormInstantiator} from "../runner/instantiation";
-import { notifyComponentMounted } from "./Component";
 import { Mutex } from "@runtime/runner/py-util";
+import { chainOrSuspend, pyNone } from "@Sk";
+import { getFormInstantiator } from "../runner/instantiation";
+import { notifyComponentMounted } from "./Component";
 
 /*#
 id: repeatingpanel
@@ -72,14 +71,11 @@ description: |
   For example, if you had a table called 'people' with columns 'name' and 'age', you could drop two labels into the RepeatingPanel and assign the `text` of the first label to `self.item['name']` and the `text` of the second label to `self.item['age']`.
   The labels in each row line up, causing a column effect. To create column headers, you can drop a ColumnPanel above the RepeatingPanel and put labels in as appropriate.
 
-  ![Screenshot](img/screenshots/repeating-panel-table.png)
-
 */
 
-var PyDefUtils = require("PyDefUtils");
-const { pyCall } = require("../PyDefUtils");
+import PyDefUtils from "PyDefUtils";
 
-module.exports = (pyModule, componentsModule) => {
+const RepeatingPanel = (pyModule, componentsModule) => {
 
     const { checkNone, checkString } = Sk.builtin;
     const { isTrue } = Sk.misceval;
@@ -600,8 +596,19 @@ module.exports = (pyModule, componentsModule) => {
 
     // v3 runtime has a much nicer way of dealing with this
     const setItemTemplateV3 = (self, template) => {
-        self._anvil.templateFormName = Sk.builtin.checkString(template) ? template.toString() : "";
         self._anvil.constructItemTemplate = undefined;
+
+        if (!isTrue(template)) {
+            self._anvil.templateFormName = "";
+            return repaginateWithParent(self);
+        }
+        
+        if (checkString(template)) {
+            self._anvil.templateFormName = template.toString();
+        } else {
+            self._anvil.templateFormName = "";
+        }
+
         return Sk.misceval.chain(
             Sk.misceval.tryCatch(() => Sk.misceval.chain(
                 getFormInstantiator({requestingComponent: self}, template),
@@ -632,6 +639,8 @@ module.exports = (pyModule, componentsModule) => {
 
 
 };
+
+export default RepeatingPanel;
 /*!defClass(anvil,RepeatingPanel,Component)!*/
 
 /*

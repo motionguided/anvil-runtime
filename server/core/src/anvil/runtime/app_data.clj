@@ -225,7 +225,7 @@
                                                                           (group-by #(and (contains? seen-assets (:name %)) (not= (:name %) "theme.css"))))]
                   ;;(println depending-app "(" (:name dep-info) ") -> " (:id dep-info) " (" (:name dep-info) ") version " version " / " version-sha "/" (:version full-dep))
                   (recur (assoc loaded-deps app-id
-                                            (-> (select-keys dep-content [:forms :modules :server_modules :package_name :secrets :native_deps :runtime_options :toolbox_sections :toolbox :layouts :config_schema :client_init_module])
+                                            (-> (select-keys dep-content [:forms :modules :server_modules :package_name :secrets :native_deps :runtime_options :toolbox_sections :toolbox :layouts :config_schema :client_init_module :code_prelude])
                                                 (assoc :version-spec (clean-version-spec version)
                                                        :commit-id (:version full-dep)
                                                        :depending_app depending-app

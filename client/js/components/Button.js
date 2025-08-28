@@ -3,7 +3,7 @@
 import { getCssPrefix } from "@runtime/runner/legacy-features";
 import { setHandled } from "./events";
 import { getUnsetSpacing, setElementMargin, setElementPadding } from "@runtime/runner/components-in-js/public-api/property-utils";
-var PyDefUtils = require("PyDefUtils");
+import PyDefUtils from "PyDefUtils";
 
 /*#
 id: button
@@ -19,14 +19,12 @@ description: |
   b = Button(text="This is a button")
   ```
 
-  This is an Anvil button. Drag and drop onto your form, or create one in code with the `Button` constructor:
-
-  ![Screenshot](img/screenshots/buttons.png)
+  This is an Anvil button. Drag and drop onto your form, or create one in code with the `Button` constructor.
 
 */
 
 
-module.exports = (pyModule) => {
+const Button = (pyModule) => {
 
     const {isTrue} = Sk.misceval;
 
@@ -174,6 +172,8 @@ module.exports = (pyModule) => {
     });
 
 };
+
+export default Button;
  /*!defClass(anvil,Button,Component)!*/
 
 /*

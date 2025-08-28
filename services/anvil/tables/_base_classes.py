@@ -4,10 +4,15 @@ class AppTables(object):
 
 
 class AbstractTableClass(object):
+    __slots__ = ()
     _instead = None
 
-    def __init__(self, *args, **kwargs):
-        raise TypeError("Can't instantiate a {} object. Use {} instead.".format(type(self).__name__, self._instead))
+    def __new__(cls, *args, **kwargs):
+        raise TypeError(
+            "Can't create a {} object. Use {} instead.".format(
+                cls.__name__, cls._instead
+            )
+        )
 
     def __repr__(self):
         return "<anvil.tables.{} object>".format(type(self).__name__)
@@ -15,7 +20,11 @@ class AbstractTableClass(object):
     def __dir__(self):
         # TODO should we keep this?
         # remove private attributes and methods from the dir
-        return [key for key in object.__dir__(self) if (not key.startswith("_")) or key.startswith("__")]
+        return [
+            key
+            for key in object.__dir__(self)
+            if (not key.startswith("_")) or key.startswith("__")
+        ]
 
 
 class Table(AbstractTableClass):
@@ -27,4 +36,5 @@ class SearchIterator(AbstractTableClass):
 
 
 class Row(AbstractTableClass):
+    __slots__ = ()
     _instead = "app_tables.my_table.add_row()"

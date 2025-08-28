@@ -1,36 +1,43 @@
 import {
     chainOrSuspend,
     pyCall,
-    pyCallOrSuspend, pyIterFor,
+    pyCallOrSuspend,
     pyNone,
     pyNoneType,
     pyRuntimeError,
     pyStr,
+    Suspension,
     suspensionToPromise,
     toPy,
 } from "@Sk";
-import { anvilServerMod } from "@runtime/runner/py-util";
+import { anvilServerMod, reportError } from "@runtime/runner/py-util";
 import PyDefUtils from "PyDefUtils";
+import { updateReplState } from "../../runner/logging";
 import { pyNamedExceptions, pyServerEventHandlers } from "./constants";
-import {getOutstandingMedia, reconstructObjects} from "./deserialize";
+import { getOutstandingMedia, reconstructObjects } from "./deserialize";
 import { diagnosticRequest } from "./diagnostics";
 import { ServerProfile } from "./profile";
 import {
-    OutstandingRequest,
     deleteOutstandingRequest,
+    onServerCallResponse,
+    OutstandingRequest,
     outstandingRequests,
     requestSuspensions,
-    onServerCallResponse
 } from "./rpc";
 import { VtGlobals } from "./types";
-import { updateReplState } from "../../runner/logging";
-
 
 interface ChunkData {
     type: "CHUNK_HEADER";
     requestId: string;
     mediaId: string;
     lastChunk?: boolean;
+}
+
+interface MediaErrorData {
+    type: "MEDIA_ERROR";
+    requestId: string;
+    mediaIds: string;
+    cause?: { type: string; message: string };
 }
 
 interface EventData {
@@ -44,7 +51,7 @@ export interface ResponseData {
     profile?: ServerProfile;
     response: any;
     cacheUpdates?: any;
-    importDuration?: number;    
+    importDuration?: number;
     capUpdates?: any;
     stepOut?: boolean;
 }
@@ -67,7 +74,9 @@ export function handleCookie() {
 }
 
 export function handleInvalidateMacs() {
-    const handleInvalidate = PyDefUtils.getModule("anvil.server")?.tp$getattr(new pyStr("__anvil$doInvalidatedMacs")) as any as function | undefined;
+    const handleInvalidate = PyDefUtils.getModule("anvil.server")?.tp$getattr(
+        new pyStr("__anvil$doInvalidatedMacs")
+    ) as any as () => Suspension | undefined;
     if (handleInvalidate) {
         PyDefUtils.asyncToPromise(handleInvalidate);
     }
@@ -97,6 +106,18 @@ export function handleChunkHeader(d: ChunkData) {
     nextBlobLocation = media;
     nextBlobRequestId = d.requestId;
     media.complete = d.lastChunk;
+}
+
+export function handleMediaError(d: MediaErrorData) {
+    const req = outstandingRequests[d.requestId];
+    for (const mediaId of d.mediaIds) {
+        const media = req && req.media[mediaId];
+        if (!media) {
+            console.error("Got media error for unknown request ID " + d.requestId + " / media ID " + mediaId);
+        }
+        media.error = d.cause || { type: "RuntimeError", message: "Error receiving media" };
+    }
+    maybeHandleResponse(d.requestId);
 }
 
 export function handleEvent(d: EventData) {
@@ -164,7 +185,12 @@ export async function maybeHandleResponse(id: string) {
         return;
     }
 
-    for (const { complete } of Object.values(req.media)) {
+    let mediaError = null;
+    for (const { complete, error } of Object.values(req.media)) {
+        if (error) {
+            mediaError = error;
+            break;
+        }
         if (!complete) return;
     }
 
@@ -174,10 +200,14 @@ export async function maybeHandleResponse(id: string) {
     if (!req.suppressLoading) window.setLoading?.(false);
     deleteOutstandingRequest(id);
 
+    if (mediaError) {
+        req.deferred.reject(assembleException({ error: mediaError }));
+        return;
+    }
 
     if ("response" in req.response!) {
         if (req.response?.importDuration) {
-            updateReplState({"importTime": req.response?.importDuration})
+            updateReplState({ importTime: req.response?.importDuration });
         }
 
         try {
@@ -209,7 +239,7 @@ export async function maybeHandleResponse(id: string) {
 
 export function handleResponse(d: ResponseData) {
     // response
-    
+
     const { id, objects = {}, profile } = d;
 
     if (id.startsWith("client-keepalive")) return;
@@ -226,23 +256,22 @@ export function handleResponse(d: ResponseData) {
         req.profile.mergeServerProfile(profile);
     }
 
-    
     maybeHandleResponse(id);
 }
 
-let onDebuggerMessage = null;
+type DebugHandler = (req: any, debuggers: any, susp: Suspension) => void;
 
-export const setOnDebuggerMessage = (handler) => {
+let onDebuggerMessage: null | DebugHandler = null;
+
+export const setOnDebuggerMessage = (handler: DebugHandler) => {
     onDebuggerMessage = handler;
-}
-
+};
 
 function handleDebuggerMessage(d: any) {
     const req = outstandingRequests[d.id];
     const susp = requestSuspensions[d.id];
     onDebuggerMessage?.(req, d.debuggers, susp);
 }
-
 
 export function handleMessage(data: any) {
     if (data instanceof Blob || data instanceof ArrayBuffer) {
@@ -252,6 +281,8 @@ export function handleMessage(data: any) {
     switch (true) {
         case d.type === "CHUNK_HEADER":
             return handleChunkHeader(d);
+        case d.type === "MEDIA_ERROR":
+            return handleMediaError(d);
         case d.id && ("response" in d || "error" in d):
             return handleResponse(d);
         case !!d.event:
@@ -261,16 +292,15 @@ export function handleMessage(data: any) {
         case !!d.output:
             return handleOutput(d);
         case !!d["invalidate-macs"]:
-            return handleInvalidateMacs(d);
+            return handleInvalidateMacs();
         case !!d["set-cookie"]:
             return handleCookie();
         case !!d.error:
-            return window.onerror(null, null, null, null, assembleException(d));
+            return reportError(assembleException(d));
         default:
             console.log("Unknown message from server: ", d);
     }
 }
-
 
 export const assembleException = function ({ error }: any) {
     const { type, message, trace } = error;
@@ -286,4 +316,3 @@ export const assembleException = function ({ error }: any) {
     exception._anvil = { errorObj: error };
     return exception;
 };
-

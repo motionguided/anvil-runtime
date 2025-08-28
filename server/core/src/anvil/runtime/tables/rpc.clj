@@ -242,7 +242,7 @@
               FROM rows rs, app_storage_data asd WHERE "
                                                  (apply str
                                                         (interpose " OR "
-                                                                   (map #(str "(rs.table_id = " (:source_table_id %) " and asd.table_id = " (:target_table_id %) " and asd.id = ((rs.data->'" (:col_id %) "'->>'id')::json->>1)::INTEGER)")
+                                                                   (map #(str "(rs.table_id = " (:source_table_id %) " and asd.table_id = " (:target_table_id %) " and asd.id = ((rs.data->'" (:col_id %) "'->>'id')::json->>1)::BIGINT)")
                                                                         LINK-COLS))))) "
           )
           SELECT id,table_id,data,direct_match FROM rows;")
@@ -770,7 +770,7 @@
     (delete-media-in-row table-id row-id use-quota!)
     (let [[{bytes-deleted :n_bytes}] (jdbc/query (db) ["DELETE FROM app_storage_data WHERE table_id = ? AND id = ? RETURNING octet_length(data::text) as n_bytes" table-id row-id])]
       (log/debug (str "Tables v1 delete row from table " table-id " REMOVE " bytes-deleted " bytes"))
-      (use-quota! -1 (- bytes-deleted))))
+      (use-quota! -1 (- (or bytes-deleted 0)))))
   (rpc-util/invalidate-live-object-cache! "anvil.tables.Row" rpc-util/*live-object-id*)
   nil)
 
@@ -1040,8 +1040,14 @@
   (with-table-transaction
     (let [object-id (as-int object-id)
           media (first (jdbc/query (db) ["SELECT content_type, name, data from app_storage_media WHERE object_id = ?" object-id]))]
-      (if (:data media)
+      (cond
+        (not media)
+        (throw+ {:anvil/server-error (str "Media Object " object-id " does not exist.")})
+
+        (:data media)
         (BlobMedia. (:content_type media) (:data media) (:name media))
+
+        :else
         (let [b (jdbc/db-query-with-resultset (db) ["SELECT ?" object-id]
                                               (fn [rs]
                                                 (.next rs)

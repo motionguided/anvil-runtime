@@ -1,13 +1,45 @@
+import anvil
 import anvil.tz
 from anvil.server import Capability, unwrap_capability
 
 from ._constants import CAP_KEY, NOT_FOUND, UNCACHED
 
 
+class InternalDict:
+    pass
+
+
+ThreadLocal = object
+
+if anvil.is_server_side():
+    try:
+        from anvil._threaded_server import ThreadLocal
+    except ImportError:
+        pass
+
+
+SPECIAL_ATTRS = ("__dict__", "__class__", "__module__")
+
+
+def maybe_handle_descriptors(self, attr, val):
+    if attr in SPECIAL_ATTRS:
+        object.__setattr__(self, attr, val)
+        return True
+
+    maybe_descriptor = getattr(type(self), attr, None)
+    if hasattr(maybe_descriptor, "__set__"):
+        object.__setattr__(self, attr, val)
+        return True
+    
+    return False
+
+
 def validate_cap(cap, table_id, row_id=NOT_FOUND):
     # this function ensures that the cap is the right shape and references the right table/row
     # full validation happens in clojure
-    _, _, view_dict, narrowed, _ = unwrap_capability(cap, ["_", "t", Capability.ANY, Capability.ANY, Capability.ANY])
+    _, _, view_dict, narrowed, _ = unwrap_capability(
+        cap, ["_", "t", Capability.ANY, Capability.ANY, Capability.ANY]
+    )
     assert str(view_dict["id"]) == table_id
     if row_id is not NOT_FOUND:
         assert row_id == str(narrowed["r"])
@@ -40,7 +72,10 @@ def init_spec_rows(g_view_data, table_spec, cache_spec=None):
     elif table_spec is None or cache_spec is None:
         g_table_spec = g_view_data["spec"] = table_spec
     else:
-        g_table_spec = g_view_data["spec"] = {"cols": table_spec["cols"], "cache": cache_spec}
+        g_table_spec = g_view_data["spec"] = {
+            "cols": table_spec["cols"],
+            "cache": cache_spec,
+        }
     g_table_rows = g_view_data.setdefault("rows", {})
     return g_table_spec, g_table_rows
 
@@ -78,7 +113,7 @@ def merge_row_data(row_id, row_data, g_table_rows, g_table_spec, row_cache_spec)
         if g_row_type is list:
             # fail safe sanity check
             merge_compact(row_data, g_row_data)
-        
+
     elif g_row_type is dict:
         # then the previously serialized reference to this row
         # didn't match the g_cache_spec
@@ -104,7 +139,11 @@ def merge_compact(row_data, g_row_data):
 def merge_dicts(row_data, g_row_data):
     # walk the smallest
     merged = {}
-    a, b = (row_data, g_row_data) if len(row_data) < len(g_row_data) else (g_row_data, row_data)
+    a, b = (
+        (row_data, g_row_data)
+        if len(row_data) < len(g_row_data)
+        else (g_row_data, row_data)
+    )
     cap = a.pop(CAP_KEY)
     for key, a_val in a.items():
         b_val = b.get(key, NOT_FOUND)

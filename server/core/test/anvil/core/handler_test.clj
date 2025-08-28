@@ -1,6 +1,6 @@
 (ns anvil.core.handler-test
   (:require [clojure.test :refer :all]
-            [ring.mock.request :as mock]
+            #_[ring.mock.request :as mock]
             #_[anvil.core.routes :refer :all]
             [clojure.java.io :as io])
   (:import (java.io File)))

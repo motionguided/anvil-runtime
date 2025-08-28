@@ -1,6 +1,6 @@
 import { defer, Deferred, generateUUID, globalSuppressLoading } from "@runtime/utils";
 import { anvilServerMod } from "@runtime/runner/py-util";
-import { Args, Kws, promiseToSuspension, pyStr, Suspension } from "@Sk";
+import { Args, Kws, promiseToSuspension, pyRuntimeError, pyStr, Suspension } from "@Sk";
 import PyDefUtils from "PyDefUtils";
 import { diagnosticData, diagnosticRequest } from "./diagnostics";
 import { ErrorData, ResponseData } from "./handlers";
@@ -26,7 +26,7 @@ declare global {
 type Path = (string | number)[];
 
 export interface OutstandingMedia {
-    [id: string]: { path: Path; mime_type: string; content: Blob[]; name: string; complete?: boolean };
+    [id: string]: { path: Path; mime_type: string; content: Blob[]; name: string; complete?: boolean; error?: boolean };
 }
 
 export interface OutstandingRequest {
@@ -41,6 +41,8 @@ export interface OutstandingRequest {
     onerror(evt: any): void;
     profile: Profile;
     receiveBlobsProfile?: Profile;
+    abort(reason?: any): void;
+    signal: AbortSignal;
 }
 
 type OutstandingRequests = {
@@ -153,6 +155,7 @@ export function createRequestTemplate(
 
     const deferred = defer();
 
+    const controller = new AbortController();
     const request: OutstandingRequest = {
         id: requestId,
         media: {},
@@ -160,6 +163,7 @@ export function createRequestTemplate(
         suppressLoading,
         knownLiveObjectInstances,
         knownCapabilities,
+        signal: controller.signal,
         onerror(evt: any) {
             if (!suppressLoading) window.setLoading?.(false);
             deleteOutstandingRequest(requestId);
@@ -167,8 +171,23 @@ export function createRequestTemplate(
             const msg = `Connection to server failed (${(evt && (evt.code || evt.message || evt.type)) || "FAIL"})`;
             deferred.reject(PyDefUtils.pyCall(anvilServerMod["AppOfflineError"], [new pyStr(msg)]));
         },
+        abort(reason?: any) {
+            controller.abort(reason);
+        },
         profile,
     };
+
+    // Set up abort handler once at creation
+    controller.signal.addEventListener(
+        "abort",
+        (event: any) => {
+            if (!suppressLoading) window.setLoading?.(false);
+            deleteOutstandingRequest(requestId);
+            const error = event.target?.reason || new pyRuntimeError("Request aborted");
+            deferred.reject(error);
+        },
+        { once: true }
+    );
 
     let realiseBlobsProfile: Profile | undefined;
     if (blobContent.length > 0) {
@@ -276,10 +295,17 @@ async function makeRequest(
     call: ReturnType<typeof serialize>,
     blobContent: BlobContent[]
 ) {
-    const { profile, id: requestId } = request;
+    const { profile, id: requestId, signal } = request;
+    if (signal.aborted) {
+        return;
+    }
 
     const sendProfile = profile.append("Send call");
     await waitForOutstandingRequests(sendProfile);
+
+    if (signal.aborted) {
+        return;
+    }
     outstandingRequests[requestId] = request;
 
     await trySend(call, null, sendProfile, request);
@@ -351,7 +377,8 @@ export function doRpcCall(
     const { deferred } = request;
     callExecuter ??= executeCall;
     callExecuter(request, serializedCallPromise, blobContent, suppressLoading);
-    const suspension = promiseToSuspension(deferred.promise);
+    const suspension: Suspension<any> = promiseToSuspension(deferred.promise);
     suspension.data.serverRequestId = request.id;
+    suspension.data.request = request;
     return suspension;
 }

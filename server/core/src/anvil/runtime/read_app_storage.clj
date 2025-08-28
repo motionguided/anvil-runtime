@@ -58,15 +58,15 @@ Below, you will find:
 
 Go to the [Anvil Editor](https://anvil.works/build?utm_source=github:app_README) (you might need to sign up for a free account) and click on “Clone from GitHub” (underneath the “Blank App” option):
 
-<img src=\"https://anvil.works/docs/version-control-new-ide/img/git/clone-from-github.png\" alt=\"Clone from GitHub\"/>
+<img src=\"https://anvil.works/docs/version-control/img/git/clone-from-github.png\" alt=\"Clone from GitHub\"/>
 
 Enter the URL of this GitHub repository. If you're not yet logged in, choose \"GitHub credentials\" as the authentication method and click \"Connect to GitHub\".
 
-<img src=\"https://anvil.works/docs/version-control-new-ide/img/git/clone-app-from-git.png\" alt=\"Clone App from Git modal\"/>
+<img src=\"https://anvil.works/docs/version-control/img/git/clone-app-from-git.png\" alt=\"Clone App from Git modal\"/>
 
 Finally, click \"Clone App\".
 
-This app will then be in your Anvil account, ready for you to run it or start editing it! **Any changes you make will be automatically pushed back to this repository, if you have permission!** You might want to [make a new branch](https://anvil.works/docs/version-control-new-ide?utm_source=github:app_README).
+This app will then be in your Anvil account, ready for you to run it or start editing it! **Any changes you make will be automatically pushed back to this repository, if you have permission!** You might want to [make a new branch](https://anvil.works/docs/version-control?utm_source=github:app_README).
 
 ### Running the app yourself:
 
@@ -79,15 +79,15 @@ Find the **Run** button at the top-right of the Anvil editor:
 
 Now you've cloned the app, you can [deploy it on the internet with two clicks](https://anvil.works/docs/deployment/quickstart?utm_source=github:app_README)! Find the **Publish** button at the top-right of the editor:
 
-<img src=\"https://anvil.works/docs/deployment-new-ide/img/environments/publish-button.png\"/>
+<img src=\"https://anvil.works/docs/deployment/img/environments/publish-button.png\"/>
 
 When you click it, you will see the Publish dialog:
 
-<img src=\"https://anvil.works/docs/deployment-new-ide/img/quickstart/empty-environments-dialog.png\"/>
+<img src=\"https://anvil.works/docs/deployment/img/quickstart/empty-environments-dialog.png\"/>
 
 Click **Publish This App**, and you will see that your app has been deployed at a new, public URL:
 
-<img src=\"https://anvil.works/docs/deployment-new-ide/img/quickstart/default-public-environment.png\"/>
+<img src=\"https://anvil.works/docs/deployment/img/quickstart/default-public-environment.png\"/>
 
 That's it - **your app is now online**. Click the link and try it!
 

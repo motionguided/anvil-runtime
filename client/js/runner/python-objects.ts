@@ -48,6 +48,7 @@ import {
     initNativeSubclass,
     kwsToObj,
     objToKws,
+    reportError,
     s_add_component,
     s_hide,
     s_init_subclass,
@@ -405,7 +406,7 @@ export function getComponentClass(typeSpec: string, defaultDepId: string): Compo
             (exception) => {
                 // This is probably user code, so surface it:
                 // @ts-ignore
-                window.onerror(null, null, null, null, exception);
+                reportError(exception);
                 throw `Error importing ${formModuleName}: ${strError(exception)}`;
             }
         ),

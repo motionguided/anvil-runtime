@@ -2,9 +2,38 @@
 
 window.messages = window.messages || {};
 
-$(function() {
-    window.addEventListener("message", async function(e) {
+let nextRequestId = 0;
+const outstandingRequests = {};
 
+window.anvilCallIdeFn = (fn, args, timeout = 500) => {
+    const msg = {
+        type: "CALL",
+        id: nextRequestId++,
+        fn,
+        args,
+    };
+    const p = new Promise((resolve, reject) => {
+        outstandingRequests[msg.id] = { resolve, reject };
+    });
+
+    if (window.parent !== window) {
+        window.parent.postMessage(msg, "*");
+    } else if (window.opener) {
+        window.opener.postMessage(msg, "*");
+    } else {
+        throw new Error("No IDE to talk to.");
+    }
+    if (timeout) {
+        // null or 0 means no timeout
+        setTimeout(() => {
+            outstandingRequests[msg.id]?.reject(new Error("Timeout"));
+        }, timeout);
+    }
+    return p;
+};
+
+$(function () {
+    window.addEventListener("message", async function (e) {
         // Filter out messages without data.
         if (!e.data) {
             return;
@@ -17,35 +46,52 @@ $(function() {
             return;
         }
 
-        var fn = window.messages[e.data.fn];
-        var rv;
-        try {
-            if (fn) {
-                rv = {result: await fn.call(window.messages, e.data.args)};
-            } else {
-                console.debug("Message not recognised:", e.data);
-                //rv = {error: "Message '"+e.data.fn+"' not recognised"};
+        if (e.data.response || e.data.error) {
+            const { id, response, error } = e.data;
+            const request = outstandingRequests[id];
+            if (request) {
+                delete outstandingRequests[id];
+                if (response) {
+                    request.resolve(response);
+                } else {
+                    request.reject(error);
+                }
             }
-        } catch (err) {
-            console.error(err, err.stack || "(no stack trace)");
-            if (err instanceof Sk.builtin.BaseException) {
-                rv = {fn: "pythonError", traceback: err.traceback, type: err.tp$name, msg: Sk.ffi.remapToJs(err.args)[0]};
-            } else {
-                rv = {error: ""+err};
+        } else {
+            var fn = window.messages[e.data.fn];
+            var rv;
+            try {
+                if (fn) {
+                    rv = { result: await fn.call(window.messages, e.data.args) };
+                } else {
+                    console.debug("Message not recognised:", e.data);
+                    //rv = {error: "Message '"+e.data.fn+"' not recognised"};
+                }
+            } catch (err) {
+                console.error(err, err.stack || "(no stack trace)");
+                if (err instanceof Sk.builtin.BaseException) {
+                    rv = {
+                        fn: "pythonError",
+                        traceback: err.traceback,
+                        type: err.tp$name,
+                        msg: Sk.ffi.toJs(err.args)[0],
+                    };
+                } else {
+                    rv = { error: "" + err };
+                }
+            }
+
+            if (rv) {
+                rv.requestId = e.data.requestId;
+
+                if (window.parent !== window) {
+                    window.parent.postMessage(rv, e.origin);
+                } else if (window.opener) {
+                    window.opener.postMessage(rv, e.origin);
+                }
             }
         }
-
-        if (rv) {
-            rv.requestId = e.data.requestId;
-
-            if (window.parent !== window) {    
-                window.parent.postMessage(rv, e.origin);
-            } else if (window.opener) {
-                window.opener.postMessage(rv, e.origin);
-            }
-        }
-    })
-    window.parent.postMessage({fn: "ready"},"*");
-    window.opener?.postMessage({fn: "ready"},"*");
+    });
+    window.parent.postMessage({ fn: "ready" }, "*");
+    window.opener?.postMessage({ fn: "ready" }, "*");
 });
-

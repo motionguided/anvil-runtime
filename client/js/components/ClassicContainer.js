@@ -1,15 +1,11 @@
 "use strict";
 
 import { getCssPrefix } from "@runtime/runner/legacy-features";
-import * as PyDefUtils from "../PyDefUtils";
-import {
-    s_raise_event,
-    s_remove_from_parent,
-} from "../runner/py-util";
-import { raiseEventOrSuspend } from "./Component";
-import { Container, validateChild } from "./Container";
+import PyDefUtils from "PyDefUtils";
+import { s_raise_event, s_remove_from_parent } from "../runner/py-util";
+import { Container, indexInRange, validateChild } from "./Container";
 
-module.exports = function(pyModule) {
+const ClassicContainer = (pyModule) => {
 
     pyModule["ClassicContainer"] = PyDefUtils.mkComponentCls(pyModule, "ClassicContainer", {
         base: [pyModule["ClassicComponent"], Container],
@@ -99,8 +95,10 @@ module.exports = function(pyModule) {
 
         const c = { component: pyComponent, layoutProperties: jsLayoutProperties };
         const components = self._anvil.components;
-        const { index } = jsLayoutProperties;
-        if (typeof index === "number" && index >= 0 && index < components.length) {
+        let { index } = jsLayoutProperties;
+        index = indexInRange(index, self);
+
+        if (typeof index === "number") {
             components.splice(index, 0, c);
         } else {
             components.push(c);
@@ -144,3 +142,5 @@ module.exports = function(pyModule) {
  *  - Methods: add_component, get_components, clear
  *
  */
+
+export default ClassicContainer;

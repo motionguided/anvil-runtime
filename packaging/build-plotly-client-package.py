@@ -14,11 +14,11 @@ OUT_DIR = "../client/py"
 TEMPLATE_DIR = "../client/js/lib/templates"
 LIB_DIR = "../client/js/lib"
 
-PYVERSION = "5.13.1"
-VERSION = (
-    "2.18.2"  # JS version - should match current python version (find package.json in github.com/plotly/plotly.py)
-)
-SCHEMA_URL = f"https://raw.githubusercontent.com/plotly/plotly.js/v{VERSION}/dist/plot-schema.json"
+PYVERSION = "6.1.2"
+# JS version - should match current python version
+# (find package.json in github.com/plotly/plotly.py/js/package.json)
+JSVERSION = "3.0.1"
+SCHEMA_URL = f"https://raw.githubusercontent.com/plotly/plotly.js/v{JSVERSION}/dist/plot-schema.json"
 
 # Copied from https://github.com/plotly/plotly.py
 # packages/python/plotly/codegen/utils.py#L1026
@@ -110,7 +110,9 @@ def add_type(module_name, class_name, obj):
                 if spec.get("items"):
                     attr, spec = list(spec.get("items").items())[0]
 
-                instance_attrs[attr] = {"$ref": full_name.lower() + "." + class_nameify(attr) + " instance"}
+                instance_attrs[attr] = {
+                    "$ref": full_name.lower() + "." + class_nameify(attr) + " instance"
+                }
             constructor_args.append(
                 {
                     "name": attr,
@@ -166,7 +168,11 @@ top_level_classes = []
 
 
 def load_trace(trace_schema):
-    walk_attrs(f"plotly.graph_objs.{trace_schema['type']}", trace_schema["attributes"], required_classes)
+    walk_attrs(
+        f"plotly.graph_objs.{trace_schema['type']}",
+        trace_schema["attributes"],
+        required_classes,
+    )
     name = class_nameify(trace_schema["type"])
     top_level_classes.append(name)
     add_type("plotly.graph_objs", name, trace_schema["attributes"])
@@ -179,7 +185,9 @@ def load_layout(layout_schema):
     layout_schema["layoutAttributes"]["template"]["role"] = "object"
     del layout_schema["layoutAttributes"]["template"]["valType"]
 
-    walk_attrs(f"plotly.graph_objs.layout", layout_schema["layoutAttributes"], required_classes)
+    walk_attrs(
+        f"plotly.graph_objs.layout", layout_schema["layoutAttributes"], required_classes
+    )
     top_level_classes.append("Layout")
     add_type("plotly.graph_objs", "Layout", layout_schema["layoutAttributes"])
     required_classes["_layout"] = {"a": ["Layout"]}
@@ -242,7 +250,7 @@ def write_templates():
     os.chdir(TEMPLATE_DIR)
 
     # specify the URL of the GitHub directory
-    url = f"https://api.github.com/repos/plotly/plotly.py/contents/packages/python/plotly/plotly/package_data/templates?ref=v{PYVERSION}"
+    url = f"https://api.github.com/repos/plotly/plotly.py/contents/plotly/package_data/templates?ref=v{PYVERSION}"
 
     # send a GET request to the URL
     response = requests.get(url)
@@ -268,7 +276,7 @@ def write_templates():
 
 def update_plotly_min():
     os.chdir(LIB_DIR)
-    url = f"https://raw.githubusercontent.com/plotly/plotly.js/v{VERSION}/dist/plotly.min.js"
+    url = f"https://raw.githubusercontent.com/plotly/plotly.js/v{JSVERSION}/dist/plotly.min.js"
     response = requests.get(url)
     if response.status_code != 200:
         print("Failed to load plotly.min.js")

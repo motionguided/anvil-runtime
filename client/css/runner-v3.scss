@@ -3,17 +3,17 @@ this would be:
 @import "../node_modules/modern-normalize/modern-normalize.css" layer(preflight);
 but our css minifier doesn't support this syntax - if we upgrade to webpack 5 then we can
 */
-@import "./modern-normalize";
-@import "./preflight";
-@import "./runner/bootstrap-legacy-v3.scss";
-@import "./runner/modal-v3.scss";
-@import "./runner/grid-v3.scss";
-@import "./runner/alert-v3.scss";
-@import "./runner/animate-v3.scss";
-@import "./runner/classic_components-v3.scss";
-@import "./runner/banner.scss";
-@import "./runner/error-indicator.scss";
-@import "./runner/loading-spinner.scss";
+@use "modern-normalize";
+@use "preflight";
+@use "runner/bootstrap-legacy-v3.scss";
+@use "runner/modal-v3.scss";
+@use "runner/grid-v3.scss";
+@use "runner/alert-v3.scss";
+@use "runner/animate-v3.scss";
+@use "runner/classic_components-v3.scss";
+@use "runner/banner.scss";
+@use "runner/error-indicator.scss";
+@use "runner/loading-spinner.scss";
 
 @font-face {
     font-family: "Glyphicons Halflings";
@@ -318,10 +318,10 @@ select.anvil-form-control {
     display: block !important;
 }
 .anvil-component-icon-present button .anvil-component-icon.anvil-left.anvil-top-icon,
-.anvil-component-icon-present.align-center .anvil-component-icon.anvil-left.anvil-top-icon {
+.anvil-component-icon-present.anvil-align-center .anvil-component-icon.anvil-left.anvil-top-icon {
     margin: auto;
 }
-.anvil-component-icon-present.align-right .anvil-component-icon.anvil-left.anvil-top-icon {
+.anvil-component-icon-present.anvil-align-right .anvil-component-icon.anvil-left.anvil-top-icon {
     margin-left: auto;
     margin-right: 0;
 }
@@ -390,6 +390,11 @@ a.anvil-component-icon-present.anvil-top-icon > .anvil-link-text {
 }
 .anvil-form-control:-ms-input-placeholder {
     color: #aaa;
+}
+
+i.fa::before {
+    /* ensure font awesome works if ::before font-family is overridden */
+    font-family: inherit;
 }
 
 input[type="number"]::-webkit-inner-spin-button,

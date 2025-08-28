@@ -16,11 +16,11 @@ import {
 } from "../runner/py-util";
 import { Component, getListenerCallbacks, raiseWritebackEventOrSuspend } from "./Component";
 
-var PyDefUtils = require("PyDefUtils");
+import PyDefUtils from "PyDefUtils";
 
 const hasOwnProperty = Object.prototype.hasOwnProperty;
 
-module.exports = (pyModule) => {
+const ClassicComponent = (pyModule) => {
     // TODO: pyModule["ComponentTag"] = ComponentTag
     pyModule["ComponentTag"] = Sk.misceval.buildClass(
         pyModule,
@@ -579,6 +579,8 @@ module.exports = (pyModule) => {
         return _anvil;
     }
 };
+
+export default ClassicComponent;
 
 /*
  * TO TEST:

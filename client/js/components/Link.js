@@ -2,7 +2,7 @@
 import { getCssPrefix } from "@runtime/runner/legacy-features";
 import { setHandled, isHandled } from "./events";
 import { getUnsetPadding, setElementPadding } from "@runtime/runner/components-in-js/public-api/property-utils";
-var PyDefUtils = require("PyDefUtils");
+import PyDefUtils from "PyDefUtils";
 const { isTrue } = Sk.misceval;
 
 /*#
@@ -41,7 +41,7 @@ description: |
   You can link to another Form by setting the `click` event handler to run `open_form` on an instance of the form you want to open.
 */
 
-module.exports = (pyModule) => {
+const Link = (pyModule) => {
 
     pyModule["Link"] = PyDefUtils.mkComponentCls(pyModule, "Link", {
         base: pyModule["ColumnPanel"],
@@ -66,6 +66,7 @@ module.exports = (pyModule) => {
                 type: "string",
                 defaultValue: Sk.builtin.str.$empty,
                 pyVal: true,
+                important: true,
                 exampleValue: "https://google.com",
                 description: "The target URL of the link. Can be set to a URL string or to a Media object.",
                 initialize: true,
@@ -203,6 +204,8 @@ module.exports = (pyModule) => {
     }
 
 };
+
+export default Link;
 
 /*!defClass(anvil,Link,anvil.ColumnPanel)!*/
 

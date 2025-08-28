@@ -1,6 +1,7 @@
+import anvil.server
 from anvil.server import portable_class
 
-from ._row import Row
+from ._row import Row, _is_draft
 
 # Helpful classes for table methods that include Rows/SearchIterators
 # But sending the Row across the wire is unnecessary
@@ -40,8 +41,16 @@ def to_ref(obj):
     ob_type = type(obj)
     if ob_type in (list, tuple):
         return tuple(to_ref(item) for item in obj)
-    elif ob_type is Row:
-        return RowRef(obj._cap)
+    elif isinstance(obj, Row):
+        if _is_draft(obj):
+            raise ValueError(
+                "It looks like you're trying to write a draft as a linked row. This is not allowed."
+                "Either use row.buffer_changes(True), or save the draft first."
+                " (Found {!r})".format(obj)
+            )
+        elif obj._anvil.cap is None:
+            raise RuntimeError("Row has no capability")
+        return RowRef(obj._anvil.cap)
     return obj
 
 

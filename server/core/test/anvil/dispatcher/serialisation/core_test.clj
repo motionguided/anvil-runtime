@@ -27,10 +27,10 @@
 
   (let [cs (reify
              ChunkedStream
-             (consume [_this f]
+             (consume [_this on-chunk _on-error]
                (let [b (byte-array 10)]
-                 (f 0 false b)
-                 (f 1 true b)))
+                 (on-chunk 0 false b)
+                 (on-chunk 1 true b)))
              MediaDescriptor
              (getContentType [_this] "text/plain")
              (getName [_this] nil))]
@@ -67,33 +67,3 @@
       (serialise! {:id "x" :baz m} send! false))))
 
 (def f)
-
-#_ (deftest test-deserialise
-  (let [ds (mk-Deserialiser)]
-    (is (= (deserialise ds {:id "x"} nil nil nil nil) {:id "x"}))
-
-
-    (let [r (deserialise ds {:id "x", :baz nil, :objects [{:path ["baz"], :type ["DataMedia"],
-                                                           :id   "XYZ", :mime-type "text/plain",
-                                                           :name nil}]} nil nil nil nil)
-
-          chunks (atom [])
-          add-chunk! #(swap! chunks conj %&)]
-
-      (is (instance? ChunkedStream (:baz r)))
-
-      (processBlobHeader ds {:type "CHUNK_HEADER", :requestId "x", :mediaId "XYZ", :chunkIndex 0, :lastChunk false})
-      (processBlob ds (byte-array 10))
-
-      (.consume (:baz r) add-chunk!)
-      (Thread/sleep 100)
-      (is (= (count @chunks) 1))
-      (is (= (take 2 (first @chunks)) [0 false]))
-      (is (= 10 (alength (nth (first @chunks) 2))))
-
-      (processBlobHeader ds {:type "CHUNK_HEADER", :requestId "x", :mediaId "XYZ", :chunkIndex 1, :lastChunk true})
-      (processBlob ds (byte-array 10))
-      (Thread/sleep 100)
-
-      (is (= (count @chunks) 2))
-      (is (= (take 2 (second @chunks)) [1 true])))))

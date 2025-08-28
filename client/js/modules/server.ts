@@ -3,7 +3,7 @@
 import { setOnDebuggerMessage } from "@runtime/modules/_server/handlers";
 import { registerServerCallSuspension } from "@runtime/modules/_server/rpc";
 import { data } from "@runtime/runner/data";
-import { anvilMod, s__get__, s__module__, s__name__ } from "@runtime/runner/py-util";
+import { anvilMod, funcFastCall } from "@runtime/runner/py-util";
 import {
     Args,
     buildNativeClass,
@@ -21,11 +21,13 @@ import {
     pyCallable,
     pyCallOrSuspend,
     pyCheckType,
+    pyClassMethod,
     pyException,
     pyFunc,
     pyIterFor,
     pyList,
     pyLookupError,
+    pyMethod,
     pyNewableType,
     pyNone,
     pyNoneType,
@@ -58,10 +60,11 @@ import {
     SerializationInfo,
     websocket,
 } from "./_server";
+import { setPortableClassSerializationInfo } from "./_server/serialization-info";
 import type { Capability } from "./_server/types";
 
 //@ts-ignore
-module.exports = function (appId: string, appOrigin: string) {
+function server(appId: string, appOrigin: string) {
     const pyMod: { [attr: string]: pyObject } = {
         __name__: new pyStr("anvil.server"),
         app_origin: toPy(appOrigin),
@@ -83,7 +86,8 @@ module.exports = function (appId: string, appOrigin: string) {
         })
     );
 
-    const doServerCall = window.anvilParams.isCrawler ? doHttpCall : doRpcCall;
+    // @ts-ignore
+    const doServerCall = window.anvilParams.isCrawler || window.anvilForceRpcHttp ? doHttpCall : doRpcCall;
 
     pyMod["call_$rw$"] = new pyFunc(
         PyDefUtils.withRawKwargs(function (pyKwargs: Kws, pyCmd: pyStr, ...args: Args) {
@@ -576,6 +580,12 @@ module.exports = function (appId: string, appOrigin: string) {
         });
     }
 
+    const failOnClientWhenCalled = funcFastCall(() => {
+        throw new pyRuntimeError("Cannot call this function from client code");
+    });
+
+    const NOT_AVAILABLE_ON_CLIENT = ["list_background_tasks", "get_background_task"];
+
     setUpModuleMethods("anvil.server", pyMod, {
         portable_class: {
             $meth(pyClass: pyType | pyStr, pyName: pyStr | pyNoneType) {
@@ -594,8 +604,16 @@ module.exports = function (appId: string, appOrigin: string) {
                             "The second argument to portable_class must be a string, got " + typeName(pyName)
                         );
                     }
-                    pyClass.anvil$serializableName = tpName;
+                    // match the server side implementation
+                    setPortableClassSerializationInfo(pyClass, tpName);
                     pyValueTypes[tpName] = pyClass;
+
+                    const registeredServerSideMethods = weakServerMethods.get(pyClass) ?? [];
+
+                    for (const [methodName, method] of registeredServerSideMethods) {
+                        method._server_name = "anvil.server_side/" + tpName + "." + methodName;
+                    }
+
                     return pyClass;
                 };
                 if (pyName === pyNone && pyClass instanceof pyStr) {
@@ -634,6 +652,9 @@ module.exports = function (appId: string, appOrigin: string) {
                 if (name === "startup_data") {
                     // this needs to be lazy - because appStartupData doesn't exist until after the app has started
                     return data.appStartupData ?? pyNone;
+                }
+                if (NOT_AVAILABLE_ON_CLIENT.includes(name)) {
+                    return failOnClientWhenCalled;
                 }
                 throw new pyAttributeError(name);
             },
@@ -708,33 +729,96 @@ module.exports = function (appId: string, appOrigin: string) {
         }),
     });
 
-    pyMod["server_side_method"] = buildNativeClass("server_side_method", {
-        constructor: function server_side_method() {},
+    const weakServerMethods = new WeakMap();
+
+    function copyAttr(wrapper: pyCallable, wrapped: pyCallable, name: pyStr) {
+        try {
+            const v = wrapped.tp$getattr(name);
+            wrapper.tp$setattr(name, v);
+        } catch {
+            // pass
+        }
+    }
+
+    function functoolsUpdateWrapper(wrapper: pyCallable, wrapped: pyCallable) {
+        for (const attr of [pyStr.$module, pyStr.$name, pyStr.$qualname, pyStr.$doc, pyStr.$ann]) {
+            copyAttr(wrapper, wrapped, attr);
+        }
+    }
+
+    pyMod["server_method"] = buildNativeClass("server_method", {
+        constructor: function server_method() {
+            this._server_name = null;
+            this._is_class_method = false;
+            this._check_register = () => {
+                if (this._server_name === null) {
+                    throw new pyRuntimeError(
+                        "@server_side method can only be used as the top-most decorator on a method defined in a portable class"
+                    );
+                }
+            };
+            this._get_fn = funcFastCall((args, kws = []) => {
+                this._check_register();
+                return doServerCall(kws, args, this._server_name);
+            });
+        },
         slots: {
+            tp$new(args, kws) {
+                const cls = this.constructor as pyNewableType<pyObject>;
+                const self = new cls() as pyObject;
+                self._kws = kws;
+                // kws are meaningless on the client - they only make sense on the server
+                if (args.length === 0) {
+                    return Sk.abstr.gattr(self, pyStr.$call);
+                } else {
+                    return self;
+                }
+            },
             tp$init(args, kws) {
                 if (args.length != 1 || kws?.length) {
                     throw new TypeError("@server_side_method takes no arguments, just a function");
                 }
+                const fn = args[0];
+                this._is_class_method = fn instanceof pyClassMethod;
+                functoolsUpdateWrapper(this as pyCallable, fn as pyCallable);
+            },
+            tp$call(args, kws) {
+                this.tp$init(args, kws);
+                return this;
             },
             tp$descr_get(obj, type) {
-                return pyCallOrSuspend(this._get_fn, [obj, type]);
+                this._check_register();
+                if (!this._is_class_method) {
+                    return this._get_fn.tp$descr_get(obj, type);
+                }
+                if (type == null) {
+                    if (obj == null) {
+                        throw new pyRuntimeError("bad call to __get__");
+                    }
+                    type = obj.ob$type;
+                }
+                return new pyMethod(this._get_fn, type);
             },
         },
         methods: {
             __set_name__: {
                 $meth(owner, name) {
-                    const cname = `anvil.server_side/${Sk.abstr.gattr(owner, s__module__)}.${Sk.abstr.gattr(
-                        owner,
-                        s__name__
-                    )}.${name}`;
-                    this._get_fn = new pyFunc(
-                        PyDefUtils.withRawKwargs(function (pyKwargs: Kws, ...args: Args) {
-                            return doServerCall(pyKwargs, args, cname);
-                        })
-                    ).tp$getattr(s__get__);
+                    let registeredServerSideMethods = weakServerMethods.get(owner);
+                    if (registeredServerSideMethods === undefined) {
+                        registeredServerSideMethods = [];
+                        weakServerMethods.set(owner, registeredServerSideMethods);
+                    }
+                    registeredServerSideMethods.push([name, this]);
                     return pyNone;
                 },
                 $flags: { MaxArgs: 2, MinArgs: 2 },
+            },
+        },
+        getsets: {
+            _is_class_method: {
+                $get() {
+                    return toPy(this._is_class_method);
+                },
             },
         },
     });
@@ -776,13 +860,16 @@ module.exports = function (appId: string, appOrigin: string) {
     }
 
     for (const componentName of components) {
-        const pyClass = anvilMod[componentName];
-        pyClass.anvil$serializableName = "anvil." + componentName;
-        pyValueTypes["anvil." + componentName] = pyClass;
+        const pyClass = anvilMod[componentName] as pyType;
+        const name = "anvil." + componentName;
+        setPortableClassSerializationInfo(pyClass, name);
+        pyValueTypes[name] = pyClass;
     }
 
     return { pyMod, log: sendLog, registerServerCallSuspension, setOnDebuggerMessage };
-};
+}
+
+export default server;
 
 /*#
 id: http_apis

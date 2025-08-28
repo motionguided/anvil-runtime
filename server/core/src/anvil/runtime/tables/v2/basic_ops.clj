@@ -5,6 +5,7 @@
     [anvil.runtime.tables.v2.util :as util-v2]
     [anvil.util :as util]
     [clojure.java.jdbc :as jdbc]
+    [anvil.runtime.tables.v2.jdbc-trace :as jdbc-t]
     [clojure.string :as str]
     [clojure.tools.logging :as log]
     [slingshot.slingshot :refer :all]
@@ -56,11 +57,11 @@
 
 
 (defn- clean-id [maybe-id index]
-  (if-let [id (try (Integer/parseInt (str maybe-id)) (catch Exception _e))]
+  (if-let [id (try (Long/parseLong (str maybe-id)) (catch Exception _e))]
     (assoc [nil nil] index id)
     (try (->> (re-matches #"^\[(\d+),(\d+)\]$" maybe-id)
               rest
-              (map #(Integer/parseInt %))
+              (map #(Long/parseLong %))
               seq) (catch Exception _e))))
 
 (defn- clean-row-id [maybe-id]
@@ -329,7 +330,8 @@
         full-params (apply concat primary-params (for [[SQL params] LINK-QUERIES] params))
         ;;_ (log/trace "walk-and-fetch:" FULL-SQL full-params)
         ;;_ (log/trace "Fetch spec:\n" (with-out-str (pprint/pprint fetch-spec)))
-        results (jdbc/query db-c (cons FULL-SQL full-params))
+        results (util/with-metric-query "SELECT v2 tables fetch"
+                  (jdbc-t/query db-c (cons FULL-SQL full-params)))
         ;;_ (log/trace "Fetch returns:" results)
 
         raw-primary-results (filter #(= (:fid %) 0) results)]

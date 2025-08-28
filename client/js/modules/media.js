@@ -1,8 +1,7 @@
-const { anvilMod } = require("@runtime/runner/py-util");
+import { anvilMod } from "@runtime/runner/py-util";
+import PyDefUtils from "PyDefUtils";
 
-module.exports = function () {
-    const PyDefUtils = require("PyDefUtils");
-
+const media = () => {
     const {
         builtin: {
             bool: pyBool,
@@ -161,3 +160,5 @@ module.exports = function () {
 
     return mediaMod;
 };
+
+export default media;

@@ -104,6 +104,8 @@
 
 (def set-cron-hooks! (util/hook-setter #{update-job! get-environment-for-job}))
 
+(def restrict-scheduled-tasks? false)
+
 (defn launch-cron-jobs! []
   (let [jobs-we-have-committed-to-launching
         (util/with-db-lock ::launch-cron-jobs false
@@ -125,31 +127,37 @@
                     job))))))]
 
     (doseq [{:keys [job_id task_name last_bg_task_id] :as job} jobs-we-have-committed-to-launching]
-      (let [{:keys [app_id] :as environment} (get-environment-for-job job)]
+      (let [{:keys [app_id env_id] :as environment} (get-environment-for-job job)]
         (let [launch! (fn []
                         (try+
                           ;; This session is created with no log data, so will not be logged unless there's an error launching - see below.
-                          (let [session (sessions/new-unlogged-session-from-environment environment "background_task" {:scheduled_task job_id :func (str "task:" task_name)})]
-                            (dispatcher/dispatch!
-                              {:call              {:func   "anvil.private.background_tasks.launch"
-                                                   :args   [task_name]
-                                                   :kwargs {}}
-                               :scheduled-task-id job_id
-                               :app-id            app_id
-                               :environment       environment
-                               :session-state     session
-                               :call-stack        (list {:type :scheduled_task})
-                               :origin            :server}
-                              ;; Return path
-                              {:update!  (constantly nil)
-                               :respond! (fn [{:keys [error response]}]
-                                           (if error
-                                             (do
-                                               ;; There was an error launching the scheduled task, so *now* the session is worth logging.
-                                               ;; We'll pretend it's a "background_task" session, event though the task never launched.
-                                               (app-log/record-event! session nil "err" (str (:type error) ": " (:message error)) error)
-                                               (log/error (str "Failed to launch Scheduled Task " job_id " for app " app_id ": " error)))
-                                             (update-job! util/db job {:last_bg_task_id (json/read-str (:id response))})))}))
+                          (let [session (sessions/new-unlogged-session-from-environment environment "background_task" {:scheduled_task job_id :func (str "task:" task_name)})
+                                restrict? (and restrict-scheduled-tasks?
+                                               (app-data/abuse-caution? session app_id))]
+                            (if restrict?
+                              (do
+                                (log/warn (str "Not launching scheduled task for free user: " job_id " " app_id " (" env_id ")"))
+                                (app-log/record-event! session nil "err" "Scheduled tasks are currently disabled on the free plan" {}))
+                              (dispatcher/dispatch!
+                                {:call              {:func   "anvil.private.background_tasks.launch"
+                                                     :args   [task_name]
+                                                     :kwargs {}}
+                                 :scheduled-task-id job_id
+                                 :app-id            app_id
+                                 :environment       environment
+                                 :session-state     session
+                                 :call-stack        (list {:type :scheduled_task})
+                                 :origin            :server}
+                                ;; Return path
+                                {:update!  (constantly nil)
+                                 :respond! (fn [{:keys [error response]}]
+                                             (if error
+                                               (do
+                                                 ;; There was an error launching the scheduled task, so *now* the session is worth logging.
+                                                 ;; We'll pretend it's a "background_task" session, event though the task never launched.
+                                                 (app-log/record-event! session nil "err" (str (:type error) ": " (:message error)) error)
+                                                 (log/error (str "Failed to launch Scheduled Task " job_id " for app " app_id ": " error)))
+                                               (update-job! util/db job {:last_bg_task_id (json/read-str (:id response))})))})))
                           (catch :anvil/app-loading-error e
                             (log/warn e (str "Failed to load app when launching scheduled task " job_id " for app " app_id ": " (:anvil/app-loading-error e) "-" (:message e))))
                           (catch Object e

@@ -521,7 +521,7 @@
   (if (integer? x)
     x
     (try
-      (Integer/parseInt x)
+      (Long/parseLong x)
       (catch NumberFormatException _
         nil))))
 

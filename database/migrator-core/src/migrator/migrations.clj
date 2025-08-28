@@ -12,6 +12,10 @@
 
 (def schemas (atom {}))
 
+;; @TODO: Currently only a single snapshot version is supported
+(def snapshot-version "2024-10-15-deployment-pools")
+(def snapshots (atom {}))
+
 (def ANVIL-USER (atom nil))
 
 (defn add-migration! [migration-db-type version-tag migrate-fn]
@@ -59,20 +63,17 @@
                                                     (name migration-db-type) migration-name e))
                                    (throw+ {:migrator.core/migration-failure :migration-failed})))))]
           :when migration-name]
-
-    (if (= migration-name "schema")
-      (swap! schemas assoc migration-db-type execute-fn)
-      (add-migration! migration-db-type migration-name execute-fn))))
+    (cond
+      (= migration-name "schema")
+        (swap! schemas assoc migration-db-type execute-fn)
+      (= migration-name (str "snapshot-" snapshot-version))
+        (swap! snapshots assoc migration-db-type execute-fn)
+      :default
+        (add-migration! migration-db-type migration-name execute-fn))))
 
 
 (defn is-db-empty? [db]
-  (try
-    (jdbc/query db ["SELECT 'Test for presence of table' FROM db_version LIMIT 1"])
-    false
-    (catch SQLException e
-      (if (= "42P01" (.getSQLState e))
-        true
-        (throw e)))))
+  (:empty (first (jdbc/query db ["SELECT to_regclass('db_version') IS NULL AS empty"]))))
 
 
 ;; ------------------------------------------------

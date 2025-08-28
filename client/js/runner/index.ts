@@ -1,11 +1,21 @@
-import { data, setData, SetDataParams } from "./data";
-
-console.log("Loading runner v2");
-
+import { reconstructSerializedMapWithMedia } from "@runtime/modules/_server/deserialize";
+import { pyCallable, pyCallOrSuspend, pyDict, pyNone, pyRuntimeError, pyStr, pyTuple, toJs, toPy } from "../@Sk";
 import "../extra-python-modules";
 import "../messages";
+import PyDefUtils from "PyDefUtils";
+import { registerSolidComponent, solidComponents } from "./components-in-js/component-from-solid";
+import * as _jsComponentApi from "./components-in-js/public-api";
+import { data, setData, SetDataParams } from "./data";
 import "./error-handling";
+import { isCustomAnvilError } from "./error-handling";
+import { setLegacyOptions } from "./legacy-features";
+import { setLoading } from "./loading-spinner";
 import { logEvent } from "./logging";
+import { anvilMod, anvilServerMod, jsObjToKws, reportError } from "./py-util";
+import { setupPythonEnvironment } from "./python-environment";
+import { warn } from "./warnings";
+
+console.log("Loading runner v2");
 
 if (navigator.userAgent.indexOf("Trident/") > -1) {
     //@ts-ignore
@@ -21,20 +31,10 @@ window.PyDefUtils = PyDefUtils;
 
 window.anvilCurrentlyConstructingForms = [];
 
-import { reconstructSerializedMapWithMedia } from "@runtime/modules/_server/deserialize";
-import { pyCallable, pyCallOrSuspend, pyDict, pyNone, pyRuntimeError, pyStr, pyTuple, toJs, toPy } from "../@Sk";
-import * as PyDefUtils from "../PyDefUtils";
-import { registerSolidComponent, solidComponents } from "./components-in-js/component-from-solid";
-import * as _jsComponentApi from "./components-in-js/public-api";
-import { isCustomAnvilError } from "./error-handling";
-import { setLegacyOptions } from "./legacy-features";
-import { setLoading } from "./loading-spinner";
-import { anvilMod, anvilServerMod, jsObjToKws } from "./py-util";
-import { setupPythonEnvironment } from "./python-environment";
-import { warn } from "./warnings";
-
 export let hooks: {
+    beforeLoadApp?: () => void | Promise<void>;
     onLoadedApp?: () => void;
+    onOpenedForm?: () => void;
     getSkulptOptions?: () => any;
 } = {};
 
@@ -141,7 +141,7 @@ async function openForm(formName: string | null) {
     const formArgs = data.deserializedFormArgs?.map?.(toPy) ?? [];
     const formKwargs = jsObjToKws(data.deserializedFormKwargs);
 
-    return await PyDefUtils.callAsync(
+    const r = await PyDefUtils.callAsync(
         anvilMod.open_form,
         undefined,
         undefined,
@@ -149,6 +149,8 @@ async function openForm(formName: string | null) {
         new pyStr(formName),
         ...formArgs
     );
+    hooks.onOpenedForm?.();
+    return r;
 }
 
 function openMainModule(moduleName: string) {
@@ -156,9 +158,9 @@ function openMainModule(moduleName: string) {
     //@ts-ignore
     window.anvilAppMainModule = moduleName;
     // since we import as __main__ portable classes won't work
-    return Sk.misceval
-        .asyncToPromise(() => Sk.importModuleInternal_(fullName, false, "__main__", undefined, undefined, false, true))
-        .catch((e) => window.onerror(undefined, undefined, undefined, undefined, e));
+    return PyDefUtils.asyncToPromise(() =>
+        Sk.importModuleInternal_(fullName, false, "__main__", undefined, undefined, false, true)
+    ).catch((e) => reportError(e));
 }
 
 function printComponents(printId: string, printKey: string) {
@@ -234,6 +236,8 @@ window.loadApp = async function (params: SetDataParams) {
         console.log("Rejected duplicate app load");
         return;
     }
+
+    await hooks.beforeLoadApp?.();
 
     if ("serviceWorker" in navigator) {
         navigator.serviceWorker

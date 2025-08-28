@@ -39,15 +39,10 @@
                                    ;; Refresh access token if it's about to expire.
                                    (> (.getTime (Date.)) (+ 60000 (.getTime (-> @*session-state* :google :delegation-access-token :expires_at)))))
                            (let [refresh-token (get-delegation-refresh-token rpc-util/*app-info* (:server_config (get-google-service-props)))
-                                 {:keys [scope] :as access-token} (google-sso/refresh-access-token refresh-token
+                                 access-token (google-sso/refresh-access-token refresh-token
                                                                                (:client-id conf/google-client-config)
-                                                                               (:client-secret conf/google-client-config))
-                                 scopes (set (.split scope " "))
-                                 has-drive? (contains? scopes "https://www.googleapis.com/auth/drive")
-                                 app-info (:app-info @*session-state*)]
+                                                                               (:client-secret conf/google-client-config))]
                              (swap! *session-state* #(assoc-in % [:google :delegation-access-token] access-token))
-                             (when has-drive?
-                               (swap! apps-with-drive-scope assoc (:id app-info) (select-keys app-info [:name :user_id :user_organisation])))
                              (log/debug "Access token updated:" (-> @*session-state* :google :delegation-access-token))))
 
                          (assoc-in httpkit-map [:headers "Authorization"]

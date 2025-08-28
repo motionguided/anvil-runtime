@@ -1,6 +1,6 @@
 "use strict";
 
-var PyDefUtils = require("PyDefUtils");
+import PyDefUtils from "PyDefUtils";
 
 /*#
 id: image
@@ -29,7 +29,7 @@ description: |
   you set it to a string. (Anvil automatically generates a `URLMedia` object for that URL.)
 */
 
-module.exports = (pyModule) => {
+const Image = (pyModule) => {
     const { isTrue } = Sk.misceval;
 
     pyModule["Image"] = PyDefUtils.mkComponentCls(pyModule, "Image", {
@@ -278,6 +278,8 @@ module.exports = (pyModule) => {
         }
     }
 };
+
+export default Image;
 
 /*!defClass(anvil,Image,Component)!*/
 

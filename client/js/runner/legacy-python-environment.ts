@@ -1,5 +1,17 @@
-import { chainOrSuspend, pyAttributeError, pyCall, pyFunc, pyList, pyModule, pyNone, pyStr } from "@Sk";
-import * as PyDefUtils from "PyDefUtils";
+import {
+    chainOrSuspend,
+    pyAttributeError,
+    pyCall,
+    pyFunc,
+    pyList,
+    pyModule,
+    pyNone,
+    pyObject,
+    pyStr,
+    retryOptionalSuspensionOrThrow,
+    Suspension,
+} from "@Sk";
+import PyDefUtils from "PyDefUtils";
 import { data } from "./data";
 import { PyModMap } from "./py-util";
 
@@ -74,7 +86,25 @@ function createLazyServices(globalAnvilModule: PyModMap) {
     }
 }
 
-function makePerAppAnvilModule(globalAnvilModule: PyModMap, packageName: string, templateMap: PyModMap) {
+function makePerAppAnvilModule(
+    globalAnvilModule: PyModMap,
+    packageName: string,
+    templateMakers: Record<string, () => pyObject | Suspension>
+) {
+    // this is the crazy legacy hack
+    // where instead of `from ._anvil_designer import Form1Template`
+    // we use `from anvil import *` to import a template
+    // to make this work we create an anvil module per package (1 for each dep and 1 for the app)
+    // we then inject all the templates into this new anvil module
+    // so that the form template is now in the name space for the form
+    // if you delete `from anvil import *` in a legacy app's form, you no longer have the app template in the namespace
+
+    const templateMap = {} as PyModMap;
+    // in legacy v1 apps, just realize all the templates - no need for perf considerations
+    for (const [className, pyTemplateClassMaker] of Object.entries(templateMakers)) {
+        templateMap[className] = retryOptionalSuspensionOrThrow(pyTemplateClassMaker());
+    }
+
     templateMap.__all__ = new pyList(
         [...Object.keys(globalAnvilModule).filter((s) => !s.startsWith("_")), ...Object.keys(templateMap)].map(
             (s) => new pyStr(s)
@@ -111,7 +141,11 @@ function copyAnvilModulesToSysModules(packageName: string) {
     }
 }
 
-export function setupLegacyV1AnvilModule(globalAnvilModule: PyModMap, packageName: string, templateMap: PyModMap) {
+export function setupLegacyV1AnvilModule(
+    globalAnvilModule: PyModMap,
+    packageName: string,
+    templateMap: Record<string, () => pyObject | Suspension>
+) {
     // Runtime v1 and below uses a really grotty mechanism for getting form templates.
     // We use prototypical inheritance to give each app a slightly different
     // view of the 'anvil' module, with its own form templates in.

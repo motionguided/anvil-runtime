@@ -13,7 +13,7 @@ import {
 import { getCssPrefix } from "@runtime/runner/legacy-features";
 import { anvilMod, s_add_component } from "@runtime/runner/py-util";
 import { chainOrSuspend, pyCallOrSuspend, pyObject, pyStr, Suspension } from "@Sk";
-import { asyncToPromise } from "PyDefUtils";
+import PyDefUtils from "PyDefUtils";
 
 const s_click = new pyStr("click");
 const s_alert_footer_buttons = new pyStr("anvil.alerts.FooterButton");
@@ -250,15 +250,15 @@ class Modal extends EventEmitter {
         const hideFns = [];
         const showFns = [];
 
-        const pyButtonPanel = await asyncToPromise(() => pyCallOrSuspend<Component>(anvilMod["HtmlTemplate"]));
-        const buttonPanelElement = await asyncToPromise(pyButtonPanel.anvil$hooks.setupDom);
+        const pyButtonPanel = await PyDefUtils.asyncToPromise(() => pyCallOrSuspend<Component>(anvilMod["HtmlTemplate"]));
+        const buttonPanelElement = await PyDefUtils.asyncToPromise(pyButtonPanel.anvil$hooks.setupDom);
 
         buttonPanelElement.classList.add("anvil-alert-footer-button-panel");
 
         const buttonClass = anvilMod["pluggable_ui"].mp$subscript(s_alert_footer_buttons);
 
         for (const { text, style, onClick } of buttonDefs) {
-            const pyButton = await asyncToPromise(() =>
+            const pyButton = await PyDefUtils.asyncToPromise(() =>
                 pyCallOrSuspend<Component>(
                     buttonClass,
                     [],
@@ -269,8 +269,8 @@ class Modal extends EventEmitter {
                 onClick?.();
                 this.hide();
             };
-            await asyncToPromise(() => addEventHandler(pyButton, s_click, hideOnClick));
-            await asyncToPromise(() => pyCallOrSuspend(pyButtonPanel.tp$getattr(s_add_component), [pyButton]));
+            await PyDefUtils.asyncToPromise(() => addEventHandler(pyButton, s_click, hideOnClick));
+            await PyDefUtils.asyncToPromise(() => pyCallOrSuspend(pyButtonPanel.tp$getattr(s_add_component), [pyButton]));
         }
 
         modalFooter.append(buttonPanelElement);
@@ -401,7 +401,7 @@ class Modal extends EventEmitter {
         // do this after show backdrop otherwise the backdrop flashes oddly
         (document.activeElement as HTMLElement)?.blur?.();
         this.elements.modalDialog.focus();
-        await asyncToPromise(() => chainOrSuspend(null, ...this._showFns));
+        await PyDefUtils.asyncToPromise(() => chainOrSuspend(null, ...this._showFns));
         await this.emit("show", this);
 
         return this;
@@ -457,7 +457,7 @@ class Modal extends EventEmitter {
                 backdrop.remove();
             }
             this.el.style.display = "none";
-            asyncToPromise(() => chainOrSuspend(null, ...this._hideFns));
+            PyDefUtils.asyncToPromise(() => chainOrSuspend(null, ...this._hideFns));
             this.emit("hidden", this);
             this.el.remove();
         }, TRANSITION);

@@ -1,3 +1,4 @@
+import PyDefUtils from "PyDefUtils";
 import type { Kws, pyNoneType, pyObject, pyTuple } from "../@Sk";
 import {
     Args,
@@ -17,6 +18,7 @@ import {
     pyCallable,
     pyDict,
     pyFunc,
+    pyImportError,
     pyIter,
     pyKeyError,
     pyList,
@@ -29,10 +31,10 @@ import {
     toPy,
     tryCatchOrSuspend,
 } from "../@Sk";
-import * as PyDefUtils from "../PyDefUtils";
 import {
     AnvilHooks,
     Component,
+    ComponentConstructor,
     EventDescription,
     PropertyDescription,
     PropertyDescriptionBase,
@@ -114,6 +116,8 @@ const propNameMap = [
     ["default_binding_prop", "defaultBindingProp"],
     ["show_in_designer_when", "showInDesignerWhen"],
     ["iconsets", "iconsets"],
+    ["hidden", "hidden"],
+    ["deprecated", "deprecated"],
 ] as const;
 
 function cleanPropertyDescription(property: NonNullable<FormYaml["properties"]>[number]): PropertyDescription {
@@ -270,7 +274,7 @@ const setupDataBindingWritebackListeners = (pyForm: FormTemplate, dataBindings: 
                         name
                 );
             }
-            window.onerror(null, null, null, null, e);
+            reportError(e);
             return pyNone;
         }
     };
@@ -548,7 +552,7 @@ export interface FormTemplate extends Component {
     anvil$itemValue?: pyObject;
     // used by CustomComponentProperty
     anvil$customProps?: { [name: string]: pyObject };
-    anvil$customPropsDefaults: { [name: string]: pyObject };
+    anvil$customPropsDefaults: { [name: string]: any };
     _anvil?: any;
 }
 
@@ -562,7 +566,8 @@ const MetaCustomComponent: pyNewableType<FormTemplateConstructor> = buildNativeC
                 const asMap = kwsToObj(kws);
                 for (const propName in customProps) {
                     if (propName in asMap) continue;
-                    asMap[propName] = customProps[propName];
+                    // we convert to Py now to avoid issues with mutable default values
+                    asMap[propName] = toPy(customProps[propName]);
                 }
                 kws = objToKws(asMap);
             }
@@ -575,423 +580,459 @@ export const createFormTemplateClass = (
     yaml: FormYaml,
     depAppId: string | null,
     className: string,
-    anvilModule: PyModMap
-): FormTemplateConstructor => {
+    anvilModule: PyModMap,
+    moduleName: string
+): FormTemplateConstructor | Suspension => {
     const pyBase = yaml.container
         ? getAnvilComponentClass(anvilModule, yaml.container.type) ||
-          retryOptionalSuspensionOrThrow(
-              getFormClassObject(resolveFormSpec(yaml.container.type.substring(5), depAppId))
-          )!
+          getFormClassObject(resolveFormSpec(yaml.container.type.substring(5), depAppId))
         : WithLayout;
 
-    // Legacy bits of _anvil we can't get rid of yet
-    const _anvil: any = {};
-    const events: EventDescription[] = [];
-    const properties: PropertyDescriptionBase[] = [ITEM_PROPERTY];
-    if (yaml.custom_component || yaml.slots) {
-        events.push(...cleanEventDescriptions(yaml.events));
-        properties.push(...cleanPropertyDescriptions(yaml.properties));
-    }
-    if (!events.some(({ name }) => name === "refreshing_data_bindings")) {
-        events.push(FORM_REFRESH_DATA_BINDINGS_EVENT_HIDDEN);
+    if (pyBase === undefined) {
+        throw new pyImportError("Failed to import form " + yaml.container.type.substring(5));
     }
 
-    const dataBindings = setupDataBindings(yaml);
-    const componentNames = getComponentNames(yaml);
+    return chainOrSuspend(pyBase, (pyBase: ComponentConstructor) => {
+        // Legacy bits of _anvil we can't get rid of yet
+        const _anvil: any = {};
+        const events: EventDescription[] = [];
+        const properties: PropertyDescriptionBase[] = [ITEM_PROPERTY];
+        if (yaml.custom_component || yaml.slots) {
+            events.push(...cleanEventDescriptions(yaml.events));
+            properties.push(...cleanPropertyDescriptions(yaml.properties));
+        }
+        if (!events.some(({ name }) => name === "refreshing_data_bindings")) {
+            events.push(FORM_REFRESH_DATA_BINDINGS_EVENT_HIDDEN);
+        }
 
-    // "item" is a special descriptor that triggers the underlying descriptor on write if there is one.
-    const pyBaseItem = pyBase.$typeLookup(s_item);
+        const dataBindings = setupDataBindings(yaml);
+        const componentNames = getComponentNames(yaml);
 
-    const kwargs = [];
-    if (yaml.layout) {
-        kwargs.push("layout", { type: yaml.layout.type, defaultDepId: depAppId });
-    }
-    if (yaml.custom_component || yaml.slots) {
-        kwargs.push("metaclass", MetaCustomComponent);
-    }
+        // "item" is a special descriptor that triggers the underlying descriptor on write if there is one.
+        const pyBaseItem = pyBase.$typeLookup(s_item);
 
-    const FormTemplate = buildPyClass(
-        anvilModule,
-        ($gbl, $loc) => {
-            // The setup code is *mostly* in common between __new__ and __new_deserialized__, except for
-            // components (__new_deserialized__ already has the objects, whereas __new__ needs to
-            // instantiate them), so we keep it mostly in common
+        const kwargs = [];
+        if (yaml.layout) {
+            kwargs.push("layout", { type: yaml.layout.type, defaultDepId: depAppId });
+        }
+        if (yaml.custom_component || yaml.slots) {
+            kwargs.push("metaclass", MetaCustomComponent);
+        }
 
-            const baseConstructionArgs: Args = [];
-            if (!yaml.container) {
-                const onAssociateLayout = new pyBuiltinFunctionOrMethod({
-                    $meth(pyLayout: Component, pyForm: FormTemplate) {
-                        addEventHandlers(pyLayout, pyForm, "", yaml.layout!.event_bindings);
-                        const layoutBindings = { "": dataBindings[""] ?? [] };
-                        pyForm.anvil$formState.removeDataBindingWritebackListeners = setupDataBindingWritebackListeners(
-                            pyForm,
-                            layoutBindings,
-                            true
-                        );
-                        return chainOrSuspend(
-                            null,
-                            () => refreshDataBindings(yaml, pyForm, layoutBindings),
-                            () => addFormComponentsToLayout(yaml, pyForm, pyLayout),
-                            () => pyNone
-                        );
-                    },
-                    $flags: { MinArgs: 2, MaxArgs: 2 },
-                });
-                const onDissociateLayout = new pyBuiltinFunctionOrMethod({
-                    $meth(pyLayout: Component, pyForm: FormTemplate) {
-                        removeEventHandlers(pyLayout, pyForm, yaml.layout!);
-                        pyForm.anvil$formState.removeDataBindingWritebackListeners?.();
-                        return pyNone;
-                    },
-                    $flags: { MinArgs: 2, MaxArgs: 2 },
-                });
-                baseConstructionArgs.push(onAssociateLayout, onDissociateLayout);
-            }
-            const subYaml = yaml.container || (yaml.layout as FormContainerYaml | FormLayoutYaml);
-            const baseConstructionKwargs: Kws = jsObjToKws({
-                __ignore_property_exceptions: true,
-                ...(subYaml.properties || {}),
-            });
-            const baseNew = Sk.abstr.typeLookup<pyCallable>(pyBase, Sk.builtin.str.$new);
+        const FormTemplate = buildPyClass(
+            anvilModule,
+            ($gbl, $loc) => {
+                // The setup code is *mostly* in common between __new__ and __new_deserialized__, except for
+                // components (__new_deserialized__ already has the objects, whereas __new__ needs to
+                // instantiate them), so we keep it mostly in common
 
-            const skeletonNew = (cls: FormTemplateConstructor) =>
-                pyCallOrSuspend<FormTemplate>(baseNew, [cls, ...baseConstructionArgs], baseConstructionKwargs);
-
-            // Back half of __new__ for conventionally constructed objects;
-            // __deserialize__ for deserialized ones
-            const commonSetup = (
-                c: FormTemplate,
-                setupComponents: (c: FormTemplate) => void | Suspension | Component | SetupResult
-            ) => {
-                // Set up legacy things
-                if (c._anvil) {
-                    Object.assign(c._anvil, _anvil);
-                    c._anvil.props["item"] = new Sk.builtin.dict([]);
+                const baseConstructionArgs: Args = [];
+                if (!yaml.container) {
+                    const onAssociateLayout = new pyBuiltinFunctionOrMethod({
+                        $meth(pyLayout: Component, pyForm: FormTemplate) {
+                            addEventHandlers(pyLayout, pyForm, "", yaml.layout!.event_bindings);
+                            const layoutBindings = { "": dataBindings[""] ?? [] };
+                            pyForm.anvil$formState.removeDataBindingWritebackListeners =
+                                setupDataBindingWritebackListeners(pyForm, layoutBindings, true);
+                            return chainOrSuspend(
+                                null,
+                                () => refreshDataBindings(yaml, pyForm, layoutBindings),
+                                () => addFormComponentsToLayout(yaml, pyForm, pyLayout),
+                                () => pyNone
+                            );
+                        },
+                        $flags: { MinArgs: 2, MaxArgs: 2 },
+                    });
+                    const onDissociateLayout = new pyBuiltinFunctionOrMethod({
+                        $meth(pyLayout: Component, pyForm: FormTemplate) {
+                            removeEventHandlers(pyLayout, pyForm, yaml.layout!);
+                            pyForm.anvil$formState.removeDataBindingWritebackListeners?.();
+                            return pyNone;
+                        },
+                        $flags: { MinArgs: 2, MaxArgs: 2 },
+                    });
+                    baseConstructionArgs.push(onAssociateLayout, onDissociateLayout);
                 }
+                const subYaml = yaml.container || (yaml.layout as FormContainerYaml | FormLayoutYaml);
+                const baseConstructionKwargs: Kws = jsObjToKws({
+                    __ignore_property_exceptions: true,
+                    ...(subYaml.properties || {}),
+                });
+                const baseNew = Sk.abstr.typeLookup<pyCallable>(pyBase, Sk.builtin.str.$new);
 
-                c.anvil$formState = {
-                    refreshOnItemSet: true,
-                    dataBindings: [],
-                    slotDict: new pyDict(),
+                const skeletonNew = (cls: FormTemplateConstructor) =>
+                    pyCallOrSuspend<FormTemplate>(baseNew, [cls, ...baseConstructionArgs], baseConstructionKwargs);
+
+                // Back half of __new__ for conventionally constructed objects;
+                // __deserialize__ for deserialized ones
+                const commonSetup = (
+                    c: FormTemplate,
+                    setupComponents: (c: FormTemplate) => void | Suspension | Component | SetupResult
+                ) => {
+                    // Set up legacy things
+                    if (c._anvil) {
+                        Object.assign(c._anvil, _anvil);
+                        c._anvil.props["item"] = new Sk.builtin.dict([]);
+                    }
+
+                    c.anvil$formState = {
+                        refreshOnItemSet: true,
+                        dataBindings: [],
+                        slotDict: new pyDict(),
+                    };
+
+                    return chainOrSuspend(setupComponents(c), () => {
+                        setupDataBindingWritebackListeners(c, dataBindings, !!yaml.layout);
+                        return c;
+                    });
                 };
 
-                return chainOrSuspend(setupComponents(c), () => {
-                    setupDataBindingWritebackListeners(c, dataBindings, !!yaml.layout);
-                    return c;
-                });
-            };
-
-            $loc["__new__"] = new Sk.builtin.func(
-                PyDefUtils.withRawKwargs((kws: Kws, cls: FormTemplateConstructor) =>
-                    chainOrSuspend(skeletonNew(cls), (c) => {
-                        const yamlStack = getAndCheckNextCreationStack(yaml.class_name, depAppId);
-                        return commonSetup(c, (c: FormTemplate) =>
-                            chainOrSuspend(setupFormComponents(yaml, c, depAppId, yamlStack), (setupResult) => {
-                                if (setupResult.slots) {
-                                    for (const [name, slot] of Object.entries(setupResult.slots)) {
-                                        c.anvil$formState.slotDict.mp$ass_subscript(new pyStr(name), slot);
-                                    }
-                                }
-                                setupDropHooks(yaml, c);
-                            })
-                        );
-                    })
-                )
-            );
-
-            $loc["__new_deserialized__"] = PyDefUtils.mkNewDeserializedPreservingIdentity(
-                (self: FormTemplate, pyData: pyDict, _pyGlobalData: any) => {
-                    const pyComponents = pyData.mp$subscript(new Sk.builtin.str("c"));
-                    const pyLocalDict = pyData.mp$subscript(new Sk.builtin.str("d"));
-                    const pyAttrs = pyData.mp$subscript(new Sk.builtin.str("a"));
-
-                    function setupComponents(c: FormTemplate) {
-                        const addComponent = c.tp$getattr<pyCallable>(s_add_component);
-                        return Sk.misceval.chain(
-                            // First, add_component() all our contents
-                            Sk.misceval.iterFor(Sk.abstr.iter(pyComponents), (pyC: pyTuple<[Component, pyDict]>) => {
-                                const [pyComponent, pyLayoutProps] = pyC.v;
-                                return Sk.misceval.apply(addComponent, pyLayoutProps, undefined, [], [pyComponent]);
-                            }),
-                            // Set up our __dict__, then
-                            // crawl all over our component tree, wiring up
-                            // events
-                            () => {
-                                const update = c.$d.tp$getattr<pyCallable>(new pyStr("update"));
-                                pyCall(update, [pyLocalDict]);
-
-                                function wireUpEvents(pyComponent: Component, yaml: FormContainerYaml | ComponentYaml) {
-                                    const addEventHandler = pyComponent.tp$getattr<pyCallable>(s_add_event_handler);
-                                    for (const eventName in yaml.event_bindings) {
-                                        const pyHandler = c.tp$getattr(new pyStr(yaml.event_bindings[eventName]));
-                                        if (pyHandler) {
-                                            pyCall(addEventHandler, [new pyStr(eventName), pyHandler]);
+                $loc["__new__"] = new Sk.builtin.func(
+                    PyDefUtils.withRawKwargs((kws: Kws, cls: FormTemplateConstructor) =>
+                        chainOrSuspend(skeletonNew(cls), (c) => {
+                            const yamlStack = getAndCheckNextCreationStack(yaml.class_name, depAppId);
+                            return commonSetup(c, (c: FormTemplate) =>
+                                chainOrSuspend(setupFormComponents(yaml, c, depAppId, yamlStack), (setupResult) => {
+                                    if (setupResult.slots) {
+                                        for (const [name, slot] of Object.entries(setupResult.slots)) {
+                                            c.anvil$formState.slotDict.mp$ass_subscript(new pyStr(name), slot);
                                         }
                                     }
-                                }
+                                    setupDropHooks(yaml, c);
+                                })
+                            );
+                        })
+                    )
+                );
 
-                                if (yaml.container) {
-                                    wireUpEvents(c, yaml.container);
-                                }
+                $loc["__new_deserialized__"] = PyDefUtils.mkNewDeserializedPreservingIdentity(
+                    (self: FormTemplate, pyData: pyDict, _pyGlobalData: any) => {
+                        const pyComponents = pyData.mp$subscript(new Sk.builtin.str("c"));
+                        const pyLocalDict = pyData.mp$subscript(new Sk.builtin.str("d"));
+                        const pyAttrs = pyData.mp$subscript(new Sk.builtin.str("a"));
 
-                                function walkComponents(components: ComponentYaml[]) {
-                                    for (const yaml of components || []) {
-                                        const pyComponent = c.tp$getattr(new pyStr(yaml.name)) as Component;
-                                        wireUpEvents(pyComponent, yaml);
-                                        if (yaml.components) {
-                                            walkComponents(yaml.components);
+                        function setupComponents(c: FormTemplate) {
+                            const addComponent = c.tp$getattr<pyCallable>(s_add_component);
+                            return Sk.misceval.chain(
+                                // First, add_component() all our contents
+                                Sk.misceval.iterFor(
+                                    Sk.abstr.iter(pyComponents),
+                                    (pyC: pyTuple<[Component, pyDict]>) => {
+                                        const [pyComponent, pyLayoutProps] = pyC.v;
+                                        return Sk.misceval.apply(
+                                            addComponent,
+                                            pyLayoutProps,
+                                            undefined,
+                                            [],
+                                            [pyComponent]
+                                        );
+                                    }
+                                ),
+                                // Set up our __dict__, then
+                                // crawl all over our component tree, wiring up
+                                // events
+                                () => {
+                                    const update = c.$d.tp$getattr<pyCallable>(new pyStr("update"));
+                                    pyCall(update, [pyLocalDict]);
+
+                                    function wireUpEvents(
+                                        pyComponent: Component,
+                                        yaml: FormContainerYaml | ComponentYaml
+                                    ) {
+                                        const addEventHandler = pyComponent.tp$getattr<pyCallable>(s_add_event_handler);
+                                        for (const eventName in yaml.event_bindings) {
+                                            const pyHandler = c.tp$getattr(new pyStr(yaml.event_bindings[eventName]));
+                                            if (pyHandler) {
+                                                pyCall(addEventHandler, [new pyStr(eventName), pyHandler]);
+                                            }
                                         }
                                     }
-                                }
 
-                                walkComponents(yaml.components ?? []);
+                                    if (yaml.container) {
+                                        wireUpEvents(c, yaml.container);
+                                    }
 
-                                setupDataBindingWritebackListeners(c, dataBindings, !!yaml.layout);
-                            },
-                            // We set our component attrs last (this could trigger user code that expects
-                            // everything to be in its place)
-                            () => {
-                                const items = pyAttrs.tp$getattr<pyCallable>(new pyStr("items"));
-                                return iterForOrSuspend(pyIter<pyTuple<[pyStr, pyObject]>>(pyCall(items)), (pyItem) => {
-                                    const [pyName, pyValue] = pyItem.v;
-                                    return c.tp$setattr(pyName, pyValue, true);
-                                });
-                            }
-                        );
-                    }
+                                    function walkComponents(components: ComponentYaml[]) {
+                                        for (const yaml of components || []) {
+                                            const pyComponent = c.tp$getattr(new pyStr(yaml.name)) as Component;
+                                            wireUpEvents(pyComponent, yaml);
+                                            if (yaml.components) {
+                                                walkComponents(yaml.components);
+                                            }
+                                        }
+                                    }
 
-                    return commonSetup(self, setupComponents);
-                },
-                skeletonNew
-            );
+                                    walkComponents(yaml.components ?? []);
 
-            $loc["__serialize__"] = PyDefUtils.mkSerializePreservingIdentity(function (self: FormTemplate) {
-                // We serialise our components, our object dict, and the properties of our container
-                // type separately
-
-                // we don't have a __dict__ but our subclass should i.e. class Form1(Form1Template):
-                const d = lookupSpecial(self, pyStr.$dict) ?? new pyDict();
-                try {
-                    Sk.abstr.objectDelItem(d, new Sk.builtin.str("_serialization_key"));
-                } catch (e) {
-                    // ignore KeyError
-                }
-
-                const a = new Sk.builtin.dict();
-                let components = [];
-                // Serialise legacy _anvil
-                if (self._anvil) {
-                    for (const n in self._anvil.props) {
-                        a.mp$ass_subscript(new Sk.builtin.str(n), self._anvil.props[n]);
-                    }
-
-                    components = self._anvil.components.map(
-                        (c: { component: Component; layoutProperties: { [prop: string]: any } }) =>
-                            new Sk.builtin.tuple([c.component, toPy(c.layoutProperties)])
-                    );
-                }
-
-                // Custom component properties need no special handling - they are reflected in
-                // __dict__ or elsewhere
-
-                return new Sk.builtin.dict([
-                    new Sk.builtin.str("d"),
-                    d,
-                    new Sk.builtin.str("a"),
-                    a,
-                    new Sk.builtin.str("c"),
-                    new Sk.builtin.list(components),
-                ]);
-            });
-
-            // Kept for backwards compatibility.
-            $loc["init_components"] = $loc["__init__"] = funcFastCall(function __init__(args: Args, pyKwargs?: Kws) {
-                checkOneArg("init_components", args);
-                const self = args[0] as FormTemplate;
-                const baseInit = pyBase.tp$getattr(pyStr.$init) as pyCallable;
-                // Sort out property attrs.
-                const validKwargs = new Set(["item"]);
-
-                const propMap = kwsToObj(pyKwargs);
-
-                if (yaml.custom_component || yaml.slots) {
-                    for (const { name } of yaml.properties ?? []) {
-                        validKwargs.add(name);
-                    }
-                }
-
-                let anvilProps: PropertyDescriptionBase[];
-                const shouldInstantiateProp = (propName: string) => {
-                    if (propName === "__ignore_property_exceptions") return false;
-                    if (validKwargs.has(propName)) return true;
-                    anvilProps ??= self.anvil$hooks.properties ?? [];
-                    if (anvilProps.some(({ name }) => name === propName)) return true;
-
-                    console.log("Ignoring form constructor kwarg: ", propName);
-                    return false;
-                };
-                const propAttrs: [string, pyObject][] = [];
-                // Overwrite any valid props we were given as kwargs.
-                for (const [propName, pyPropVal] of Object.entries(propMap)) {
-                    if (shouldInstantiateProp(propName)) {
-                        propAttrs.push([propName, pyPropVal]);
-                    }
-                }
-
-                return Sk.misceval.chain(
-                    pyCallOrSuspend(baseInit, [self]),
-                    () => {
-                        self.anvil$formState.refreshOnItemSet = false;
-                    },
-                    ...propAttrs.map(
-                        ([propName, pyPropVal]) =>
-                            () =>
-                                self.tp$setattr(new Sk.builtin.str(propName), pyPropVal, true)
-                    ),
-                    () => {
-                        self.anvil$formState.refreshOnItemSet = true;
-                    },
-                    () =>
-                        Sk.misceval.tryCatch(
-                            () => pyCallOrSuspend(self.tp$getattr(new Sk.builtin.str("refresh_data_bindings"))),
-                            (e) => {
-                                if (e instanceof Sk.builtin.BaseException && e.args.v[0] instanceof Sk.builtin.str) {
-                                    e.args.v[0] = new Sk.builtin.str(
-                                        e.args.v[0].v +
-                                            ". Did you initialise all data binding sources before initialising this component?"
+                                    setupDataBindingWritebackListeners(c, dataBindings, !!yaml.layout);
+                                },
+                                // We set our component attrs last (this could trigger user code that expects
+                                // everything to be in its place)
+                                () => {
+                                    const items = pyAttrs.tp$getattr<pyCallable>(new pyStr("items"));
+                                    return iterForOrSuspend(
+                                        pyIter<pyTuple<[pyStr, pyObject]>>(pyCall(items)),
+                                        (pyItem) => {
+                                            const [pyName, pyValue] = pyItem.v;
+                                            return c.tp$setattr(pyName, pyValue, true);
+                                        }
                                     );
                                 }
-                                throw e;
-                            }
-                        )
-                );
-            });
+                            );
+                        }
 
-            if (yaml.custom_component || yaml.slots) {
-                // Create property descriptors for custom properties.
-                (yaml.properties || []).forEach((pt) => {
-                    $loc[pt.name] = pyCall(anvilModule["CustomComponentProperty"], [
-                        new pyStr(pt.name),
-                        toPy(pt.default_value || null),
+                        return commonSetup(self, setupComponents);
+                    },
+                    skeletonNew
+                );
+
+                $loc["__serialize__"] = PyDefUtils.mkSerializePreservingIdentity(function (self: FormTemplate) {
+                    // We serialise our components, our object dict, and the properties of our container
+                    // type separately
+
+                    // we don't have a __dict__ but our subclass should i.e. class Form1(Form1Template):
+                    const d = lookupSpecial(self, pyStr.$dict) ?? new pyDict();
+                    try {
+                        Sk.abstr.objectDelItem(d, new Sk.builtin.str("_serialization_key"));
+                    } catch (e) {
+                        // ignore KeyError
+                    }
+
+                    const a = new Sk.builtin.dict();
+                    let components = [];
+                    // Serialise legacy _anvil
+                    if (self._anvil) {
+                        for (const n in self._anvil.props) {
+                            a.mp$ass_subscript(new Sk.builtin.str(n), self._anvil.props[n]);
+                        }
+
+                        components = self._anvil.components.map(
+                            (c: { component: Component; layoutProperties: { [prop: string]: any } }) =>
+                                new Sk.builtin.tuple([c.component, toPy(c.layoutProperties)])
+                        );
+                    }
+
+                    // Custom component properties need no special handling - they are reflected in
+                    // __dict__ or elsewhere
+
+                    return new Sk.builtin.dict([
+                        new Sk.builtin.str("d"),
+                        d,
+                        new Sk.builtin.str("a"),
+                        a,
+                        new Sk.builtin.str("c"),
+                        new Sk.builtin.list(components),
                     ]);
                 });
-            }
 
-            if (yaml.slots) {
-                $loc["slots"] = pyPropertyFromGetSet((self: FormTemplate) => {
-                    return self.anvil$formState.slotDict;
-                });
-            }
+                function init_components(args: Args, pyKwargs?: Kws) {
+                    checkOneArg("init_components", args);
+                    const self = args[0] as FormTemplate;
+                    // Sort out property attrs.
+                    const validKwargs = new Set(["item"]);
 
-            $loc["raise_event"] = funcFastCall((args: Args<[FormTemplate, pyStr]>, kws?: Kws) => {
-                const [self, pyEventName] = args;
-                checkArgsLen("raise_event", args, 2, 2);
-                const eventName = String(pyEventName);
-                const superRaise = new pySuper(FormTemplate, self).tp$getattr<pyCallable>(s_raise_event);
-                if (!yaml.custom_component && !yaml.slots) {
-                    return pyCallOrSuspend(superRaise, [pyEventName], kws);
-                }
-                const chainedFns = (yaml.properties ?? [])
-                    .filter((p) => (p.binding_writeback_events ?? []).includes(eventName))
-                    .map((p) => () => raiseWritebackEventOrSuspend(self, new pyStr(p.name)));
+                    const propMap = kwsToObj(pyKwargs);
 
-                return chainOrSuspend(pyNone, ...chainedFns, () => pyCallOrSuspend(superRaise, [pyEventName], kws));
-            });
+                    if (yaml.custom_component || yaml.slots) {
+                        for (const { name } of yaml.properties ?? []) {
+                            validKwargs.add(name);
+                        }
+                    }
 
-            $loc["refresh_data_bindings"] = new Sk.builtin.func(function (self) {
-                // TODO: Confirm that we want to refresh even if 'item' is None - we don't necessarily just bind to item.
-                //var item = self.tp$getattr(new Sk.builtin.str("item"));
-                //if (!item || item === Sk.builtin.none.none$) { return Sk.builtin.none.none$; }
+                    let anvilProps: PropertyDescriptionBase[];
+                    const shouldInstantiateProp = (propName: string) => {
+                        if (propName === "__ignore_property_exceptions") return false;
+                        if (validKwargs.has(propName)) return true;
+                        anvilProps ??= self.anvil$hooks.properties ?? [];
+                        if (anvilProps.some(({ name }) => name === propName)) return true;
 
-                const chained: (() => pyObject | void | Suspension)[] = [
-                    () => pyCallOrSuspend(self.tp$getattr(s_raise_event), [s_refreshing_data_bindings]),
-                ];
+                        console.log("Ignoring form constructor kwarg: ", propName);
+                        return false;
+                    };
+                    const propAttrs: [string, pyObject][] = [];
+                    // Overwrite any valid props we were given as kwargs.
+                    for (const [propName, pyPropVal] of Object.entries(propMap)) {
+                        if (shouldInstantiateProp(propName)) {
+                            propAttrs.push([propName, pyPropVal]);
+                        }
+                    }
 
-                if (self._anvil?.onRefreshDataBindings) {
-                    chained.push(self._anvil.onRefreshDataBindings);
-                }
-
-                return chainOrSuspend(
-                    null,
-                    ...chained,
-                    () => refreshDataBindings(yaml, self, dataBindings),
-                    () => pyNone
-                );
-            });
-
-            // Hand-build a special "item" descriptor
-            type ItemDescriptor = pyObject;
-
-            const ItemDescriptor: pyNewableType<ItemDescriptor> = Sk.abstr.buildNativeClass("ItemDescriptor", {
-                constructor: function ItemDescriptor() {},
-                slots: {
-                    tp$descr_get(obj: FormTemplate | null, type) {
-                        if (obj == null) return this;
-                        // TODO - are we ok just assigining this onto the object?
-                        return (obj.anvil$itemValue ??= new Sk.builtin.dict());
-                    },
-                    tp$descr_set(obj: FormTemplate, value, canSuspend) {
-                        obj.anvil$itemValue = value;
-                        const rv = chainOrSuspend(
-                            pyBaseItem?.tp$descr_set?.(obj, value),
-                            () =>
-                                obj.anvil$formState.refreshOnItemSet &&
-                                pyCallOrSuspend($loc["refresh_data_bindings"], [obj])
-                        );
-                        return canSuspend ? rv : retryOptionalSuspensionOrThrow(rv);
-                    },
-                },
-            });
-            $loc["item"] = new ItemDescriptor();
-
-            $loc["__setattr__"] = new Sk.builtin.func(function (self, pyName, pyValue) {
-                const name = Sk.ffi.toJs(pyName);
-                if (componentNames.has(name)) {
-                    throw new Sk.builtin.AttributeError(
-                        "Cannot set attribute '" +
-                            name +
-                            "' on '" +
-                            self.tp$name +
-                            "' form. There is already a component with this name."
+                    return Sk.misceval.chain(
+                        pyNone,
+                        () => {
+                            self.anvil$formState.refreshOnItemSet = false;
+                        },
+                        ...propAttrs.map(
+                            ([propName, pyPropVal]) =>
+                                () =>
+                                    self.tp$setattr(new Sk.builtin.str(propName), pyPropVal, true)
+                        ),
+                        () => {
+                            self.anvil$formState.refreshOnItemSet = true;
+                        },
+                        () =>
+                            Sk.misceval.tryCatch(
+                                () => pyCallOrSuspend(self.tp$getattr(new Sk.builtin.str("refresh_data_bindings"))),
+                                (e) => {
+                                    if (
+                                        e instanceof Sk.builtin.BaseException &&
+                                        e.args.v[0] instanceof Sk.builtin.str
+                                    ) {
+                                        e.args.v[0] = new Sk.builtin.str(
+                                            e.args.v[0].v +
+                                                ". Did you initialise all data binding sources before initialising this component?"
+                                        );
+                                    }
+                                    throw e;
+                                }
+                            )
                     );
                 }
-                return chainOrSuspend(Sk.generic.setAttr.call(self, pyName, pyValue, true), () => pyNone);
-            });
 
-            const object_getattribute = Sk.abstr.typeLookup<pyCallable>(
-                Sk.builtin.object,
-                Sk.builtin.str.$getattribute
-            );
+                $loc["__init__"] = funcFastCall((args, kws) => {
+                    return chainOrSuspend(
+                        new pySuper(FormTemplate, args[0]).tp$getattr(pyStr.$init, true),
+                        (pyBaseInit: pyCallable) =>
+                            pyCallOrSuspend(pyBaseInit, baseConstructionArgs, baseConstructionKwargs),
+                        () => init_components(args, kws)
+                    );
+                });
 
-            $loc["__getattribute__"] = new Sk.builtin.func(function (self, pyName) {
-                const name = Sk.ffi.toJs(pyName);
-                // we prioritise the component over descriptors
-                // i.e. we guarantee that if you name a component parent you will get the component and not the parent
-                if (componentNames.has(name)) {
-                    const dict = self.$d;
-                    const component = dict && dict.quick$lookup(pyName);
-                    if (component !== undefined) {
-                        return component;
-                    }
+                // Kept for backwards compatibility.
+                $loc["init_components"] = funcFastCall((args, kws) => {
+                    return init_components(args, kws);
+                });
+
+                if (yaml.custom_component || yaml.slots) {
+                    // Create property descriptors for custom properties.
+                    (yaml.properties || []).forEach((pt) => {
+                        $loc[pt.name] = pyCall(anvilModule["CustomComponentProperty"], [
+                            new pyStr(pt.name),
+                            toPy(pt.default_value || null),
+                        ]);
+                    });
                 }
-                // use object.__getattribute__ because it will throw an attribute error
-                // unlike Sk.generic.getAttr which returns undefined
-                return pyCallOrSuspend(object_getattribute, [self, pyName]);
-            });
 
-            $loc[s_anvil_get_interactions.toString()] = funcFastCall(() => new pyList([]));
-            $loc[s_anvil_properties.toString()] = toPy(properties);
-            $loc[s_anvil_events.toString()] = toPy(events);
-        },
-        className,
-        [pyBase],
-        undefined,
-        kwargs as Kws
-    ) as FormTemplateConstructor;
+                if (yaml.slots) {
+                    $loc["slots"] = pyPropertyFromGetSet((self: FormTemplate) => {
+                        return self.anvil$formState.slotDict;
+                    });
+                }
 
-    FormTemplate.prototype.anvil$customPropsDefaults = Object.fromEntries(
-        (yaml.properties ?? []).filter((pt) => pt.type !== "object").map((pt) => [pt.name, toPy(pt.default_value)])
-    );
+                $loc["raise_event"] = funcFastCall((args: Args<[FormTemplate, pyStr]>, kws?: Kws) => {
+                    const [self, pyEventName] = args;
+                    checkArgsLen("raise_event", args, 2, 2);
+                    const eventName = String(pyEventName);
+                    const superRaise = new pySuper(FormTemplate, self).tp$getattr<pyCallable>(s_raise_event);
+                    if (!yaml.custom_component && !yaml.slots) {
+                        return pyCallOrSuspend(superRaise, [pyEventName], kws);
+                    }
+                    const chainedFns = (yaml.properties ?? [])
+                        .filter((p) => (p.binding_writeback_events ?? []).includes(eventName))
+                        .map((p) => () => raiseWritebackEventOrSuspend(self, new pyStr(p.name)));
 
-    return FormTemplate;
+                    return chainOrSuspend(pyNone, ...chainedFns, () => pyCallOrSuspend(superRaise, [pyEventName], kws));
+                });
+
+                $loc["refresh_data_bindings"] = new Sk.builtin.func(function (self) {
+                    // TODO: Confirm that we want to refresh even if 'item' is None - we don't necessarily just bind to item.
+                    //var item = self.tp$getattr(new Sk.builtin.str("item"));
+                    //if (!item || item === Sk.builtin.none.none$) { return Sk.builtin.none.none$; }
+
+                    const chained: (() => pyObject | void | Suspension)[] = [
+                        () => pyCallOrSuspend(self.tp$getattr(s_raise_event), [s_refreshing_data_bindings]),
+                    ];
+
+                    if (self._anvil?.onRefreshDataBindings) {
+                        chained.push(self._anvil.onRefreshDataBindings);
+                    }
+
+                    return chainOrSuspend(
+                        null,
+                        ...chained,
+                        () => refreshDataBindings(yaml, self, dataBindings),
+                        () => pyNone
+                    );
+                });
+
+                // Hand-build a special "item" descriptor
+                type ItemDescriptor = pyObject;
+
+                const ItemDescriptor: pyNewableType<ItemDescriptor> = Sk.abstr.buildNativeClass("ItemDescriptor", {
+                    constructor: function ItemDescriptor() {},
+                    slots: {
+                        tp$descr_get(obj: FormTemplate | null, type) {
+                            if (obj == null) return this;
+                            // TODO - are we ok just assigining this onto the object?
+                            return (obj.anvil$itemValue ??= new Sk.builtin.dict());
+                        },
+                        tp$descr_set(obj: FormTemplate, value, canSuspend) {
+                            obj.anvil$itemValue = value;
+                            const rv = chainOrSuspend(
+                                pyBaseItem?.tp$descr_set?.(obj, value),
+                                () =>
+                                    obj.anvil$formState.refreshOnItemSet &&
+                                    pyCallOrSuspend($loc["refresh_data_bindings"], [obj])
+                            );
+                            return canSuspend ? rv : retryOptionalSuspensionOrThrow(rv);
+                        },
+                    },
+                });
+                $loc["item"] = new ItemDescriptor();
+
+                $loc["__setattr__"] = new Sk.builtin.func(function (self, pyName, pyValue) {
+                    const name = Sk.ffi.toJs(pyName);
+                    if (componentNames.has(name)) {
+                        throw new Sk.builtin.AttributeError(
+                            "Cannot set attribute '" +
+                                name +
+                                "' on '" +
+                                self.tp$name +
+                                "' form. There is already a component with this name."
+                        );
+                    }
+                    return chainOrSuspend(Sk.generic.setAttr.call(self, pyName, pyValue, true), () => pyNone);
+                });
+
+                const object_getattribute = Sk.abstr.typeLookup<pyCallable>(
+                    Sk.builtin.object,
+                    Sk.builtin.str.$getattribute
+                );
+
+                $loc["__getattribute__"] = new Sk.builtin.func(function (self, pyName) {
+                    const name = Sk.ffi.toJs(pyName);
+                    // we prioritise the component over descriptors
+                    // i.e. we guarantee that if you name a component parent you will get the component and not the parent
+                    if (componentNames.has(name)) {
+                        const dict = self.$d;
+                        const component = dict && dict.quick$lookup(pyName);
+                        if (component !== undefined) {
+                            return component;
+                        }
+                    }
+                    // use object.__getattribute__ because it will throw an attribute error
+                    // unlike Sk.generic.getAttr which returns undefined
+                    return pyCallOrSuspend(object_getattribute, [self, pyName]);
+                });
+
+                $loc[s_anvil_get_interactions.toString()] = funcFastCall(() => new pyList([]));
+                $loc[s_anvil_properties.toString()] = toPy(properties);
+                $loc[s_anvil_events.toString()] = toPy(events);
+                if (moduleName) {
+                    $loc.__module__ = new pyStr(moduleName);
+                }
+            },
+            `${className}Template`,
+            [pyBase],
+            undefined,
+            kwargs as Kws
+        ) as FormTemplateConstructor;
+
+        // don't convert to py yet - we want to avoid issues with mutable default values
+        FormTemplate.prototype.anvil$customPropsDefaults = Object.fromEntries(
+            (yaml.properties ?? []).filter((pt) => pt.type !== "object").map((pt) => [pt.name, pt.default_value])
+        );
+
+        return FormTemplate;
+    });
 };

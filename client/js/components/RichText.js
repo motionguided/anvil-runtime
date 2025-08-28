@@ -14,7 +14,7 @@ description: |
   Provide content in markdown (the default), plain text, or a safe subset of HTML, setting the 'format' property accordingly.
 */
 
-var PyDefUtils = require("PyDefUtils");
+import PyDefUtils from "PyDefUtils";
 
 import { Remarkable } from "remarkable";
 import { chainOrSuspend, isTrue, pyCallOrSuspend, tryCatchOrSuspend } from "../@Sk";
@@ -29,18 +29,12 @@ const EMPTY_SET = new Set();
 const URI_ATTRIBUTES = new Set(["background", "cite", "href", "itemtype", "longdesc", "poster", "src", "xlink:href"]);
 const ARIA_ATTRIBUTE_PATTERN = /^aria-[\w-]*$/i;
 /**
- * A pattern that recognizes a commonly useful subset of URLs that are safe.
- * Shout-out to Angular https://github.com/angular/angular/blob/12.2.x/packages/core/src/sanitization/url_sanitizer.ts
+ * A pattern that recognizes URLs that are safe wrt. XSS in URL navigation
+ * contexts.
+ *
+ * Shout-out to Angular https://github.com/angular/angular/blob/15.2.8/packages/core/src/sanitization/url_sanitizer.ts#L38
  */
-//  const SAFE_URL_PATTERN = /^(?:(?:https?|mailto|ftp|tel|file|sms):|[^#&/:?]*(?:[#/?]|$))/i;
-const SAFE_URL_PATTERN = /^(\/|_\/theme\/|https?:\/\/)/;
-
-/**
- * A pattern that matches safe data URLs. Only matches image, video and audio types.
- * Shout-out to Angular https://github.com/angular/angular/blob/12.2.x/packages/core/src/sanitization/url_sanitizer.ts
- */
-const DATA_URL_PATTERN =
-    /^data:(?:image\/(?:bmp|gif|jpeg|jpg|png|tiff|webp)|video\/(?:mpeg|mp4|ogg|webm)|audio\/(?:mp3|oga|ogg|opus));base64,[\d+/a-z]+=*$/i;
+const SAFE_URL_PATTERN = /^(?!javascript:)(?:[a-z0-9+.-]+:|[^&:/?#]*(?:[/?#]|$))/i;
 
 const ALLOWED_ATTRIBUTES = {
     // Global attributes allowed on any supplied element below.
@@ -75,7 +69,7 @@ const allowedAttribute = (attribute, allowedAttributeSet) => {
     const attributeName = attribute.name;
     if (allowedAttributeSet.has(attributeName)) {
         if (URI_ATTRIBUTES.has(attributeName)) {
-            return Boolean(SAFE_URL_PATTERN.test(attribute.nodeValue) || DATA_URL_PATTERN.test(attribute.nodeValue));
+            return Boolean(SAFE_URL_PATTERN.test(attribute.nodeValue));
         }
         return true;
     }
@@ -224,7 +218,7 @@ const mkSlot = (nameAndMaybeFormat, slots) => {
     return domNode;
 };
 
-module.exports = (pyModule) => {
+const RichText = (pyModule) => {
 
     const md = new Remarkable("full", {
         // typographer: true, // Enable smartypants and other sweet transforms e.g. (c)
@@ -547,3 +541,5 @@ function replaceChildren() {
     this.innerHTML = "";
     this.append.apply(this, arguments);
 }
+
+export default RichText;

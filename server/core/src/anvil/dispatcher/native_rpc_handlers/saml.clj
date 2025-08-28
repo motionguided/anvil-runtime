@@ -78,7 +78,7 @@
 (defn get-sp-entity-ids [app-info]
   (log/debug "Getting SP entity ID for app" (:id app-info))
   {:app    (str conf/runtime-common-url "/_/saml-app/" (util/sha-256 (:id app-info)))
-   :shared (str conf/runtime-common-url "/_/saml-org/" (util/sha-256 (str (or (:user_organisation app-info) (:id app-info)))))})
+   :shared (str conf/runtime-common-url "/_/saml-org/" (util/sha-256 (str (or (:owner_organisation app-info) (:id app-info)))))})
 
 (defn get-settings [saml-service-server-config app-info]
   (let [[private-key-pem cert-pem] (get-cert-and-key)

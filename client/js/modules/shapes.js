@@ -1,8 +1,8 @@
-"use strict";
 
-module.exports = function() {
+
+
+const shapes = () => {
     var pyMod = {"__name__": new Sk.builtin.str("shapes")};
-    var PyDefUtils = require("PyDefUtils");
 
 
     pyMod["Shape"] = Sk.misceval.buildClass(pyMod, function($gbl, $loc) {
@@ -118,7 +118,9 @@ module.exports = function() {
 
 
     return pyMod;
-}
+};
+
+export default shapes;
 
 /*
  * TO TEST:

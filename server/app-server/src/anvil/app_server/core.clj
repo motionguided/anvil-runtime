@@ -183,8 +183,6 @@
     (routes
       (route/resources "/_/static/runtime" {:root "runtime-client-core" :mime-types util/additional-mime-types})
       (route/resources "/_/static/services" {:root "services-core" :mime-types util/additional-mime-types})
-      (GET "/_/static/icon-512x512.png" []
-           (resp/resource-response "runtime-client-core/icon-512x512.png"))
       (GET "/_/static/anvil-runtime-source.tgz" []
            ;; AGPL compliance: Provide source download
            (resp/resource-response "anvil-runtime-source.tgz"))

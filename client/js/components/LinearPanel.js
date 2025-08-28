@@ -1,7 +1,7 @@
 "use strict";
 
-var PyDefUtils = require("PyDefUtils");
-import { validateChild } from "./Container";
+import PyDefUtils from "PyDefUtils";
+import { indexInRange, validateChild } from "./Container";
 import { getCssPrefix } from "@runtime/runner/legacy-features";
 import { isInvisibleComponent } from "./helpers";
 
@@ -34,12 +34,20 @@ description: |
     If you add an `index` layout parameter to the `add_component()` call, the component will be added at that index. Index 0 is the first element in the panel, 1 is the second, etc.
 */
 
-module.exports = (pyModule) => {
-
+const LinearPanel = (pyModule) => {
     pyModule["LinearPanel"] = PyDefUtils.mkComponentCls(pyModule, "LinearPanel", {
         base: pyModule["ClassicContainer"],
 
-        properties: PyDefUtils.assembleGroupProperties(/*!componentProps(LinearPanel)!1*/ ["layout", "layout_spacing", "containers", "appearance", "tooltip", "user data"]),
+        properties: PyDefUtils.assembleGroupProperties(
+            /*!componentProps(LinearPanel)!1*/ [
+                "layout",
+                "layout_spacing",
+                "containers",
+                "appearance",
+                "tooltip",
+                "user data",
+            ]
+        ),
 
         events: PyDefUtils.assembleGroupEvents("linear panel", /*!componentEvents(LinearPanel)!1*/ ["universal"]),
 
@@ -56,42 +64,38 @@ module.exports = (pyModule) => {
                 return <li></li>;
             };
 
-            /*!defMethod(_,component,[index=None])!2*/ "Add a component to this LinearPanel, in the 'index'th position. If 'index' is not specified, adds to the bottom."
+            /*!defMethod(_,component,[index=None])!2*/ ("Add a component to this LinearPanel, in the 'index'th position. If 'index' is not specified, adds to the bottom.");
             $loc["add_component"] = PyDefUtils.funcWithKwargs(function (kwargs, self, component) {
                 validateChild(component);
 
                 let celt;
-                const idx = kwargs["index"];
+                let idx = kwargs["index"];
+                idx = indexInRange(idx, self);
 
-                return Sk.misceval.chain(
-                    component.anvil$hooks.setupDom(),
-                    element => {
-                        if (isInvisibleComponent(component)) {
-                            return pyModule["ClassicContainer"]._doAddComponent(self, component);
-                        }
-
-                        [celt] = <ContainerElement />;
-                        celt.appendChild(element);
-                        const lpul = self._anvil.elements.lpul;
-                        const children = lpul.children;
-                        if (typeof idx === "number" && idx < children.length) {
-                            lpul.insertBefore(celt, lpul.children[idx]);
-                        } else {
-                            lpul.appendChild(celt);
-                        }
-                        return pyModule["ClassicContainer"]._doAddComponent(self, component, kwargs, {
-                            detachDom() {
-                                $(element).detach();
-                                celt.remove();
-                            },
-                        });
+                return Sk.misceval.chain(component.anvil$hooks.setupDom(), (element) => {
+                    if (isInvisibleComponent(component)) {
+                        return pyModule["ClassicContainer"]._doAddComponent(self, component);
                     }
-                );
+
+                    [celt] = <ContainerElement />;
+                    celt.appendChild(element);
+                    const lpul = self._anvil.elements.lpul;
+                    const children = lpul.children;
+                    if (typeof idx === "number") {
+                        lpul.insertBefore(celt, lpul.children[idx]);
+                    } else {
+                        lpul.appendChild(celt);
+                    }
+                    return pyModule["ClassicContainer"]._doAddComponent(self, component, kwargs, {
+                        detachDom() {
+                            $(element).detach();
+                            celt.remove();
+                        },
+                    });
+                });
             });
         },
     });
-
-
 };
 
 /*!defClass(anvil,LinearPanel,Container)!*/
@@ -104,3 +108,5 @@ module.exports = (pyModule) => {
  *  - Methods: add_component
  *
  */
+
+export default LinearPanel;

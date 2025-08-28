@@ -1,7 +1,8 @@
 (ns anvil.runtime.tables.util
   (:use [compojure.core]
         [slingshot.slingshot])
-  (:require [crypto.random :as random]
+  (:require [anvil.runtime.tables.v2.jdbc-trace :as jdbc-t]
+            [crypto.random :as random]
             [clojure.java.jdbc :as jdbc]
             [anvil.runtime.conf :as conf]
             [anvil.dispatcher.native-rpc-handlers.util :as rpc-util]
@@ -46,7 +47,7 @@
 
 (defonce get-all-table-access-records
          (fn [_mapping]
-           (jdbc/query util/db ["SELECT DISTINCT ON (table_id) table_id,name,python_name,columns,client,server FROM app_storage_tables,app_storage_access WHERE id = table_id"])))
+           (jdbc-t/query util/db ["SELECT DISTINCT ON (table_id) table_id,name,python_name,columns,client,server FROM app_storage_tables,app_storage_access WHERE id = table_id"])))
 
 (defonce update-table-access-record!
          (fn [_mapping table-id update]
@@ -208,7 +209,7 @@
   (when-not (is-type? json-value col-type)
     (str "Column '" col-name "' is a " (get-type-name c col-type) " - "
          (let [val-type (get-type-from-value json-value)]
-           (log/error (str "Column type mismatch: " (pr-str col-type) " " (pr-str val-type)))
+           (log/debug (str "Column type mismatch: " (pr-str col-type) " " (pr-str val-type)))
            (or (:error val-type)
                (str "cannot set it to a " (get-type-name c val-type)))))))
 
@@ -516,8 +517,12 @@
 
     ;; Else, there is no transaction for our thread. Throw an appropriate error.
     (if (contains? (::transaction-threads @rpc-util/*session-state*) rpc-util/*thread-id*)
-      (when-not rollback?                                   ;; Rolling back an expired transaction is not an error
-        (throw+ (general-tables-error "This transaction has expired" "anvil.tables.TransactionError")))
+      (do
+        ;; Once we've thrown this error on a transaction close, we can reset the session, because user code
+        ;; is no longer expecting to be in a transaction
+        (swap! rpc-util/*session-state* update ::transaction-threads disj rpc-util/*thread-id*)
+        (when-not rollback?                                 ;; Rolling back an expired transaction is not an error
+          (throw+ (general-tables-error "This transaction has expired" "anvil.tables.TransactionError"))))
       (throw+ {:anvil/server-error "No transaction currently running"}))))
 
 
@@ -778,7 +783,7 @@
                                            (str ", (data->'" ID "')::jsonb")
 
                                            "liveObject"
-                                           (str ", (trim('\"' from data->'" ID "'->>'id')::jsonb->>1)::int")
+                                           (str ", (trim('\"' from data->'" ID "'->>'id')::jsonb->>1)::bigint")
 
                                            "media"
                                            (str ", (data->>'" ID "')::oid")
@@ -1003,12 +1008,12 @@
 
        (log/trace "Finished updating indexes.")))))
 
-
 (defn update-cols-returning
   ([table-id new-cols old-cols] (update-cols-returning table-id new-cols old-cols
                                                        (fn [& _args]
                                                          (throw (Exception. "Cannot use quota here.")))))
-  ([table-id new-cols old-cols use-quota!]
+  ([table-id new-cols old-cols use-quota!] (update-cols-returning table-id new-cols old-cols use-quota! true))
+  ([table-id new-cols old-cols use-quota! init-data?] ; init-data? should always be true in normal usage. Only provided for manual adding of columns in tables where data initialisation times out.
    (worker-pool/with-expanding-threadpool-when-slow
      (with-table-transaction
        (util/with-long-query
@@ -1021,7 +1026,7 @@
 
            (doseq [[id _c] removed-cols]
              (delete-media-in-column table-id id use-quota!))
-           (when (seq added-cols)
+           (when (and init-data? (seq added-cols))
              (jdbc/execute! (db) ["UPDATE app_storage_data SET data = data || ?::jsonb WHERE table_id = ?"
                                   (into {} (for [{:keys [id type]} added-cols] [id (if (= type "bool") false nil)]))
                                   table-id]))
@@ -1029,7 +1034,20 @@
            (update-table-views! (db) table-id new-cols)
            col-records))))))
 
-
+;; Useful for manually adding columns when it doesn't work through the UI because of timeouts.
+(defn add-col-no-init
+  ([app-id table-id name type] (add-col-no-init app-id table-id name type nil nil))
+  ([app-id table-id name type backend linked-table-id]
+   (binding [*environment-for-admin-call* {:app_id app-id}]
+     (with-table-transaction
+       (let [cols (get-cols table-id)
+             new-id (gen-new-id 8)
+             new-col (cond-> {:name     name
+                              :type     type
+                              :admin_ui {:order (inc (count cols))}}
+                             backend (assoc :backend backend :table-id linked-table-id))]
+         (update-cols-returning table-id (assoc cols new-id new-col) cols (fn [& _args] (throw (Exception. "Cannot use quota here."))) false)
+         new-col)))))
 
 (def set-table-hooks! (util/hook-setter [table-mapping-for-environment db-for-mapping
                                          db-for-mapping-transaction mutate-db-for-mapping?

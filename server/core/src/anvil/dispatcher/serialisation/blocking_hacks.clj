@@ -13,16 +13,25 @@
                     (when-let [os @baos] ;; In case it has already been dropped by a timeout.
                       (.write os ^bytes bs)
                       (when last?
-                        (deliver consumed-bytes (.toByteArray os)))))]
+                        (deliver consumed-bytes (.toByteArray os)))))
+        on-error (fn [error] (deliver consumed-bytes error))]
 
-    (types/consume chunked-stream add-bytes)
+    (types/consume chunked-stream add-bytes on-error)
 
     (worker-pool/with-expanding-threadpool-when-slow
       (let [bytes (deref consumed-bytes (* 5 60000) ::timeout)] ;; 5 min timeout
-        (if (= bytes ::timeout)
+        (cond
+          (= bytes ::timeout)
           (do
             (reset! baos nil)
             (throw+ {:anvil/server-error "Timeout while assembling BlobMedia"}))
+
+          (map? bytes)
+          (do
+            (reset! baos nil)
+            (throw+ {:anvil/server-error "Error while assembling BlobMedia"}))
+
+          :else
           (BlobMedia. (.getContentType chunked-stream)
                       bytes
                       (.getName chunked-stream)))))))

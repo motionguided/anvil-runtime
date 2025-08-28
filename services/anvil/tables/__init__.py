@@ -2,10 +2,17 @@ import time
 
 import anvil.server
 
-from ._base_classes import Row, SearchIterator, Table
 from . import _config
-from ._errors import NoSuchColumnError, QuotaExceededError, RowDeleted, TableError, TransactionConflict
+from ._base_classes import Row, SearchIterator, Table
+from ._errors import (
+    NoSuchColumnError,
+    QuotaExceededError,
+    RowDeleted,
+    TableError,
+    TransactionConflict,
+)
 from ._helpers import _hash_wrapper
+
 
 # Use old app tables by default
 class AppTables(object):
@@ -23,10 +30,10 @@ class AppTables(object):
 
     def __setattr__(self, name, val):
         raise Exception("app_tables is read-only")
-    
+
     def __iter__(self):
         return AppTableIterator()
-    
+
 
 class AppTableIterator:
     def __init__(self):
@@ -34,7 +41,7 @@ class AppTableIterator:
 
     def __iter__(self):
         return self
-    
+
     def __next__(self):
         # because __iter__ can't suspend
         if AppTables.cache is None:
@@ -42,21 +49,22 @@ class AppTableIterator:
         if self._it is None:
             self._it = AppTables.cache.keys().__iter__()
         return next(self._it)
-    
+
     next = __next__
 
 
 _set_class = object.__dict__["__class__"].__set__
 
+
 def _lazy_replace_class(self):
     if _config.get_client_config().get("enable_v2"):
         from . import v2
+
         v2._app_tables._clear_cache()
         _set_class(self, type(v2.app_tables))
     else:
         AppTables.cache = None
         _set_class(self, AppTables)
-
 
 
 def _wrap_dunder(method):
@@ -69,6 +77,9 @@ def _wrap_dunder(method):
 
 class _LazyAppTables(object):
     def __getattribute__(self, name):
+        if name == "__module__":
+            return "anvil.tables"
+
         _lazy_replace_class(self)
         return getattr(self, name)
 
@@ -78,16 +89,26 @@ class _LazyAppTables(object):
     __iter__ = AppTables.__iter__
 
 
-class _LazyContext(object):
+_ThreadLocal = object
+
+if anvil.is_server_side():
+    try:
+        from anvil._threaded_server import ThreadLocal as _ThreadLocal
+    except ImportError:
+        pass
+
+
+class _LazyContext(_ThreadLocal):
     def __enter__(self):
-        global batch_update, batch_delete
+        batchers = {"batch_update": batch_update, "batch_delete": batch_delete, "batch": batch}
         if not _config.get_client_config().get("enable_v2"):
-            batch_update.__class__ = batch_delete.__class__ = type(None)
+            for obj in batchers.values():
+                obj.__class__ = type(None)
             return self.__enter__()
 
         from .v2 import _batcher as _b
 
-        for obj, orig in zip((batch_update, batch_delete), ("batch_update", "batch_delete")):
+        for orig, obj in batchers.items():
             obj.__class__ = type(getattr(_b, orig))
             obj.__init__()
             setattr(_b, orig, obj)
@@ -117,11 +138,16 @@ anvil.server._on_invalidate_client_objects(_clear_cache)
 app_tables = _LazyAppTables()
 batch_update = _LazyContext()
 batch_delete = _LazyContext()
+batch = _LazyContext()
 # Not very nice but these references exist in uplink code
 # before we have a chance to know if we're using the v1/v2 config option
 # we can't call anvil.server until the uplink has made a connetion
 
-
+#!defFunction(anvil.tables,anvil.tables.Table,table_id)!2:
+# {
+# 	$doc: "Get a table by id. Can pass a row id in, and the table the row belongs to will be returned.",
+# anvil$helpLink: "/docs/data-tables/accelerated-tables"
+#  } ["get_table_by_id"]
 def get_table_by_id(table_id):
     if _config.get_client_config().get("enable_v2"):
         from .v2 import get_table_by_id
@@ -147,12 +173,17 @@ class Transaction:
 
     #!defMethod(anvil.tables.Transaction instance)!2: "Begin the transaction" ["__enter__"]
     def __enter__(self):
-        anvil.server.call("anvil.private.tables.open_transaction", isolation=self._isolation)
+        anvil.server.call(
+            "anvil.private.tables.open_transaction", isolation=self._isolation
+        )
         return self
 
     #!defMethod(_)!2: "End the transaction" ["__exit__"]
     def __exit__(self, e_type, e_val, tb):
-        anvil.server.call("anvil.private.tables.close_transaction", self._aborting or e_val is not None)
+        anvil.server.call(
+            "anvil.private.tables.close_transaction",
+            self._aborting or e_val is not None,
+        )
 
     #!defMethod(_)!2: "Abort this transaction. When it ends, all write operations performed during it will be cancelled" ["abort"]
     def abort(self):
@@ -227,7 +258,9 @@ from .query import page_size as _page_size
 #!defFunction(anvil.tables,%,[via_host=],[via_port=])!2: "Get a Postgres connection string for accessing this app's Data Tables via SQL.\n\nThe returned string includes temporary login credentials and sets the search path to a schema representing this app's Data Table environment.\n\nYou can override the host and port for the database connection to connect via a secure tunnel.\n\n(Available on the Dedicated Plan only.)" ["get_connection_string"]
 def get_connection_string(via_host=None, via_port=None):
     return anvil.server.call(
-        "anvil.private.get_direct_postgres_connection_string", via_host=via_host, via_port=via_port
+        "anvil.private.get_direct_postgres_connection_string",
+        via_host=via_host,
+        via_port=via_port,
     )
 
 

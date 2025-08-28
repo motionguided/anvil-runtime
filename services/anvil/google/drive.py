@@ -122,8 +122,10 @@ class DriveItem(ApiItem):
     
     #!defMethod(_)!2: "Move the DriveItem to the trash folder" ["trash"]
     def trash(self):
-        ctor = type(self)
-        return ctor(rpc.call("anvil.private.google.drive.trash", self.id, self.creds), self.creds)
+        rpc.call("anvil.private.google.drive.trash", self.id, self.creds)
+        # TODO: this is broken, since we don't return anvil_LazyMedia
+        # ctor = type(self)
+        # return ctor(rpc.call("anvil.private.google.drive.trash", self.id, self.creds), self.creds)
 
     #!defMethod(_)!2: "Delete the DriveItem (this cannot be undone)" ["delete"]
     def delete(self):

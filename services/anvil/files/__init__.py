@@ -9,7 +9,10 @@ from anvil.tables.v2 import app_tables
 from tempfile import gettempdir, mkdtemp
 import os
 import shutil
-import sqlite3
+try:
+    import sqlite3
+except ModuleNotFoundError:
+    raise RuntimeError("anvil.files cannot be used in basic Python, Try selecting a different Python version.")
 from time import time, sleep
 from contextlib import contextmanager
 from uuid import uuid4

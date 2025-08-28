@@ -1,5 +1,5 @@
 from __future__ import unicode_literals
-import threading, time, json, random, string, logging
+import threading, time, json, random, string, logging, os
 
 from ws4py.client.threadedclient import WebSocketClient
 
@@ -71,6 +71,7 @@ def __getattr__(name):
 _url = 'wss://anvil.works/uplink'
 
 logging.getLogger("ws4py").setLevel(logging.CRITICAL)
+logger = logging.getLogger(__name__)
 
 _connection = None
 _connection_lock = threading.Lock()
@@ -84,8 +85,6 @@ _connection_ctx = ConnectionContext()
 _backends = {}
 
 _fatal_error = None
-_quiet = False
-
 _init_session = None
 
 _get_extra_headers = lambda: {}
@@ -156,13 +155,12 @@ def reconnect(closed_connection):
         # uplink scripts to fail immediately or not.
         while True:
             time.sleep(10 if _fatal_error else 1)
-            if not _quiet:
-                print("Reconnecting Anvil Uplink...")
+            logger.info("Reconnecting Anvil Uplink...")
             try:
                 _get_connection()
                 break
             except:
-                print("Reconnection failed. Waiting 10 seconds, then retrying.")
+                logger.error("Reconnection failed. Waiting 10 seconds, then retrying.")
                 time.sleep(10)
 
     try:
@@ -174,8 +172,7 @@ def reconnect(closed_connection):
 
 class _Connection(WebSocketClient):
     def __init__(self, headers={}):
-        if not _quiet:
-            print("Connecting to " + _url)
+        logger.info("Connecting to " + _url)
         WebSocketClient.__init__(self, _url, headers=headers)
 
         self._ready_notify = threading.Condition()
@@ -202,8 +199,7 @@ class _Connection(WebSocketClient):
             self.send(json.dumps({'type': 'REGISTER_LIVE_OBJECT_BACKEND', 'backend': b}))
 
     def opened(self):
-        if not _quiet:
-            print("Anvil websocket open")
+        logger.info("Anvil websocket open")
         self.send(json.dumps({'key': _key, 'v': 7}))
         if _init_session is None:
             # Optimisation: Don't wait for an extra roundtrip if we don't need to
@@ -219,8 +215,7 @@ class _Connection(WebSocketClient):
             time.sleep(10)
 
     def closed(self, code, reason=None):
-        if not _quiet:
-            print("Anvil websocket closed (code %s, reason=%s)" % (code, reason))
+        logger.info("Anvil websocket closed (code %s, reason=%s)" % (code, reason))
         self._signal_ready()
         if _key:
             reconnect(self)
@@ -240,9 +235,9 @@ class _Connection(WebSocketClient):
                 _threaded_server.default_app._setup(**data.get('app-info', {}))
                 CallContext._DEFAULT_TYPE = context.type = data.get('priv', 'uplink')
 
-                if not _quiet:
-                    print("Connected to \"%s\" as %s" % (anvil.app.environment.name, "SERVER" if context.type == 'uplink' else "CLIENT"))
-                    _fatal_error = None
+                logger.info("Connected to \"%s\" as %s" % (anvil.app.environment.name, "SERVER" if context.type == 'uplink' else "CLIENT"))
+                _fatal_error = None
+
                 if _init_session is None:
                     self._signal_ready()
                 else:
@@ -258,7 +253,7 @@ class _Connection(WebSocketClient):
                             _init_session()
                             self._register_server_functions()
                         except Exception as e:
-                            print("Error during session initialisation")
+                            logger.error("Error during session initialisation")
                             _fatal_error = repr(e)
                             raise
                         finally:
@@ -267,7 +262,7 @@ class _Connection(WebSocketClient):
                     threading.Thread(target=do_init).start()
 
             elif 'output' in data:
-                print("Anvil server output: " + data['output'].rstrip("\n"))
+                logger.info("Anvil server output: " + data['output'].rstrip("\n"))
             elif type == "CALL":
                 _threaded_server.IncomingRequest(data)
             elif type == "LAUNCH_BACKGROUND":
@@ -294,20 +289,21 @@ class _Connection(WebSocketClient):
                     else:
                         send_reply(sjson)
             elif type == "KILL_TASK":
-                if not _quiet:
-                    print("******************************************************************************")
-                    print("**** This app attempted to kill a background task running on this uplink. ****")
-                    print("**** Background tasks on the uplink cannot be killed.                     ****")
-                    print("******************************************************************************")
+                logger.info("******************************************************************************")
+                logger.info("**** This app attempted to kill a background task running on this uplink. ****")
+                logger.info("**** Background tasks on the uplink cannot be killed.                     ****")
+                logger.info("******************************************************************************")
             elif type == "CHUNK_HEADER":
                 _serialise.process_blob_header(data)
+            elif type == "MEDIA_ERROR":
+                _serialise.process_media_error(data)
             elif type is None and "id" in data and ("response" in data or "error" in data):
                 _threaded_server.IncomingResponse(data)
             elif type is None and "error" in data:
                 _fatal_error = data["error"]
-                print("Fatal error from Anvil server: " + str(_fatal_error))
+                logger.error("Fatal error from Anvil server: " + str(_fatal_error))
             else:
-                print("Anvil websocket got unrecognised message: "+repr(data))
+                logger.error("Anvil websocket got unrecognised message: "+repr(data))
 
     def send(self, payload, binary=False):
         with self._sending_lock:
@@ -354,17 +350,23 @@ def _get_connection():
     return _connection
 
 
-def connect(key, url='wss://anvil.works/uplink', quiet=False, init_session=None, extra_headers={}):
-    global _key, _url, _fatal_error, _quiet, _init_session, _get_extra_headers
+def connect(key, url='wss://anvil.works/uplink', quiet=False, init_session=None, extra_headers={}, default_log_level="INFO"):
+    global _key, _url, _fatal_error, _init_session, _get_extra_headers
+
+    # Only override logging if it hasn't already been configured manually by the caller
+    if not logging.getLogger().handlers:
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(console_handler)
+        logger.setLevel(os.environ.get("ANVIL_LOG_LEVEL", "WARNING" if quiet else default_log_level))
+
     if _key is not None and _key != key:
-        if not _quiet:
-            print("Disconnecting from previous connection first...")
+        logger.info("Disconnecting from previous connection first...")
         disconnect()
 
     _key = key
     _url = url
     _fatal_error = None # Reset because of reconnection attempt
-    _quiet = quiet
     _init_session = init_session
     _get_extra_headers = (lambda: extra_headers) if type(extra_headers) is dict else extra_headers
     _get_connection()

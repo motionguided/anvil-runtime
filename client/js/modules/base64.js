@@ -1,11 +1,6 @@
-"use strict";
+import b64 from "../lib/b64";
 
-module.exports = function() {
-
-    var b64 = require("../lib/b64");
-
-    var PyDefUtils = require("PyDefUtils");
-
+const base64 = () => {
     const pyMod = { __name__: new Sk.builtin.str("base64") };
 
     const ni = new Sk.builtin.func(function() {
@@ -52,7 +47,9 @@ module.exports = function() {
         
 
     return pyMod;
-}
+};
+
+export default base64;
 
 /*
  * TO TEST:

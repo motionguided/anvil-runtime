@@ -1,7 +1,6 @@
-"use strict";
-
 import { globalSuppressLoading } from "../utils";
 import { anvilMod, anvilServerMod } from "@runtime/runner/py-util";
+import PyDefUtils from "PyDefUtils";
 
 /*#
 id: http_module
@@ -98,7 +97,7 @@ description: |
 
   2. Make the request from a server module instead. Server modules don't run in the web browser, so they don't have any of the browser's limitations.
 */
-module.exports = function () {
+const http = () => {
     const {
         builtin: {
             str: pyStr,
@@ -118,7 +117,6 @@ module.exports = function () {
     } = Sk;
 
     const pyMod = { __name__: new pyStr("http") };
-    const PyDefUtils = require("PyDefUtils");
 
     pyMod["url_encode"] = pyMod["encode_uri_component"] = new pyFunc(function(c) {
         pyCheckArgs("url_encode", arguments, 1, 1);
@@ -157,7 +155,7 @@ module.exports = function () {
             pyMessage ??= pyNone;
             pySetAttr(self, new pyStr("status"), pyStatus);
             pySetAttr(self, new pyStr("content"), pyContent);
-            if ((pyMessage === pyNone || pyMessage === pyStr.$empty) && pyStatus !== pyNone) {
+            if ((pyMessage === pyNone || pyMessage.toString() === "") && pyStatus !== pyNone) {
                 pyMessage = toPy("HTTP error " + pyStatus.toString());
             }
             return pyCall(ExceptionInit, [self, pyMessage]);
@@ -299,6 +297,8 @@ module.exports = function () {
 
     return pyMod;
 };
+
+export default http;
 
 /*
  * TO TEST:

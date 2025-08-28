@@ -1,6 +1,6 @@
 "use strict";
 
-var PyDefUtils = require("PyDefUtils");
+import PyDefUtils from "PyDefUtils";
 import { defer } from "../utils";
 
 /*#
@@ -17,7 +17,7 @@ description: |
 
 */
 
-module.exports = (pyModule) => {
+const YouTubeVideo = (pyModule) => {
 
 
     const {isTrue} = Sk.misceval;
@@ -297,6 +297,8 @@ module.exports = (pyModule) => {
     };
 
 };
+
+export default YouTubeVideo;
 
 /*!defClass(anvil,YouTubeVideo,Component)!*/
 

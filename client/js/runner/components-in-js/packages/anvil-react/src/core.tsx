@@ -16,6 +16,8 @@ import {
     type RegionInteraction,
     type StringPropertyDescription,
     type ToolboxSection,
+    type UnsetPropertyValue,
+    type UnsetPropertyValues,
 } from "@runtime/components/Component";
 import type { JsComponentAPI } from "../../../public-api";
 import type { JsComponent, JsComponentConstructor, JsContainer } from "../../../public-api/component";
@@ -163,6 +165,7 @@ export interface ReactComponentWrapper {
     sections: Map<string, Section>;
     sectionInteractions: Map<string, Map<string, Interaction>>; // sectionId => interactionId => interactions
     interactions: Map<string, Interaction | RegionRefInteraction>;
+    unsetPropertyValues: Map<string, UnsetPropertyValue>;
     inlineEditInteractions: Map<string, Interaction>; // propName => interaction
     sectionInlineEditInteractions: Map<string, Map<string, Interaction>>; // sectionId => propName => interactions
     componentKeys: WeakMap<JsComponent, number>;
@@ -411,6 +414,9 @@ function setupReactComponent(self: ReactComponent, spec: ReactComponentDefinitio
                 }
             }
         },
+        useUnsetPropertyValue(prop: string, value: UnsetPropertyValue) {
+            _.unsetPropertyValues.set(prop, value);
+        },
         useInlineEditRef: (propName, otherRef?, { onStart, onEnd } = {}) => {
             return (element) => {
                 setRef(otherRef, element);
@@ -551,6 +557,7 @@ function setupReactComponent(self: ReactComponent, spec: ReactComponentDefinitio
     const WrappedComponent = React.forwardRef<any, ComponentProps>((props, ref) => {
         // Clear on every render
         _.interactions.clear();
+        _.unsetPropertyValues.clear();
         _.inlineEditInteractions.clear();
         _.sections.clear();
         _.sectionInlineEditInteractions.clear();
@@ -671,6 +678,7 @@ function setupReactComponent(self: ReactComponent, spec: ReactComponentDefinitio
         sections: new Map(),
         sectionInteractions: new Map(),
         interactions: new Map(),
+        unsetPropertyValues: new Map(),
         inlineEditInteractions: new Map(),
         sectionInlineEditInteractions: new Map(),
         nextComponentKey: 0,
@@ -732,21 +740,28 @@ function mkComponentClass(spec: ReactComponentDefinition): JsComponentConstructo
             subscribeAnvilEvent(this, "x-anvil-page-added", () => {
                 if (!this._.portalElement) return;
                 if (rcStore.getState().components.includes(this)) return;
-                flushSync(() => {
-                    let parent = getParent(this);
-                    while (parent) {
-                        const { components: portalElements, forceRender } = portalElementCache.get(parent) ?? {};
-                        if (portalElements) {
-                            if (!portalElements.includes(this)) {
-                                portalElements.push(this);
-                                forceRender?.();
-                            }
-                            return;
+                // TODO this code was previously in a flushSync
+                // We removed the flushSync because it was creating performance issues
+                // with multiple react components added at the same time
+                // we should work out why we needed the flushSync and come up with a solution
+                // Stu thinks it was to make anvil.js.get_dom_node(react_component)
+                // work in the show event of a parent container
+                // possible alternative solution might be to add events
+                // e.g. mount/unmount for react components
+                // and just accept that get_dom_node will never work for react components in the show event of the parent
+                let parent = getParent(this);
+                while (parent) {
+                    const { components: portalElements, forceRender } = portalElementCache.get(parent) ?? {};
+                    if (portalElements) {
+                        if (!portalElements.includes(this)) {
+                            portalElements.push(this);
+                            forceRender?.();
                         }
-                        parent = getParent(parent);
+                        return;
                     }
-                    rcStore.setState(({ components }) => ({ components: [...components, this] }));
-                });
+                    parent = getParent(parent);
+                }
+                rcStore.setState(({ components }) => ({ components: [...components, this] }));
             });
             subscribeAnvilEvent(this, "x-anvil-page-removed", () => {
                 if (!this._.portalElement) return;
@@ -767,6 +782,12 @@ function mkComponentClass(spec: ReactComponentDefinition): JsComponentConstructo
                     components: components.filter((x) => x !== this),
                 }));
             });
+            subscribeAnvilEvent(this, "x-anvil-classic-show", () => {
+                raiseAnvilEvent(this, "show");
+            });
+            subscribeAnvilEvent(this, "x-anvil-classic-hide", () => {
+                raiseAnvilEvent(this, "hide");
+            });
         }
         _anvilSetupDom(): HTMLElement | Promise<HTMLElement> {
             const _ = this._;
@@ -784,11 +805,20 @@ function mkComponentClass(spec: ReactComponentDefinition): JsComponentConstructo
         _anvilGetInteractions(): Interaction[] {
             return [...remapInteractions([...this._.interactions.values()]), ...this._.inlineEditInteractions.values()];
         }
+        _anvilGetUnsetPropertyValues(): UnsetPropertyValues {
+            return Object.fromEntries(this._.unsetPropertyValues.entries());
+        }
         _anvilUpdateDesignName(name: string): void {
             this._.designName = name;
             this._.forceRender?.();
         }
-        static _anvilEvents = events ?? [];
+
+
+        static _anvilEvents = [
+            ...(events ?? []),
+            ...(!events?.some(e => e.name === "show") ? [{ name: "show" }] : []),
+            ...(!events?.some(e => e.name === "hide") ? [{ name: "hide" }] : []),
+        ];
         static _anvilProperties = (properties ?? []).map((description) => ({ ...description }));
 
         get reactComponent() {
@@ -801,40 +831,54 @@ function mkComponentClass(spec: ReactComponentDefinition): JsComponentConstructo
     if (!container) return ReactComponent_;
 
     class ReactContainer extends ReactComponent_ implements JsContainer {
-        async _anvilAddComponent(
+        _anvilAddComponent(
             component: JsComponent,
             layoutProperties: { [prop: string]: any; index?: number | undefined }
         ) {
             const _ = this._;
+            const finish = () => {
+                _.componentKeys.set(component, _.componentKeys.get(component) || _.nextComponentKey++);
+                if ("index" in layoutProperties && typeof layoutProperties.index === "number") {
+                    _.components.splice(layoutProperties.index, 0, component);
+                } else {
+                    _.components.push(component);
+                }
+                _.componentLayoutProps.set(component, layoutProperties);
+                _.componentVisibility.set(component, true);
+                _.forceRender?.();
+                return {
+                    onRemove: () => {
+                        this._.components = this._.components.filter((c) => c !== component);
+                        this._.forceRender?.();
+                        portalElementCache.delete(component);
+                    },
+                    setVisibility: (v: boolean) => {
+                        _.componentVisibility.set(component, v);
+                        this._.forceRender?.();
+                    },
+                    isMounted: false,
+                };
+            };
             if (!isReactComponent(component)) {
-                await component._anvilSetupDom();
-                portalElementCache.set(component, { components: [], forceRender: () => _.forceRender?.() });
+                const maybePromise = component._anvilSetupDom();
+                // Avoid returning a Promise unless we have to
+                // some components don't want code to suspend when doing dom manipulation
+                // e.g. tabulator cells
+                if (maybePromise instanceof Promise) {
+                    return maybePromise.then(() => {
+                        portalElementCache.set(component, { components: [], forceRender: () => _.forceRender?.() });
+                        return finish();
+                    });
+                } else {
+                    portalElementCache.set(component, { components: [], forceRender: () => _.forceRender?.() });
+                    return finish();
+                }
             } else {
-                // in case somoeone asked for this elements dom node before being rendered
+                // in case someone asked for this element's dom node before being rendered
                 // we know this element doesn't have a parent at this stage
                 delete component._.portalElement;
+                return finish();
             }
-            _.componentKeys.set(component, _.componentKeys.get(component) || _.nextComponentKey++);
-            if ("index" in layoutProperties && typeof layoutProperties.index === "number") {
-                _.components.splice(layoutProperties.index, 0, component);
-            } else {
-                _.components.push(component);
-            }
-            _.componentLayoutProps.set(component, layoutProperties);
-            _.componentVisibility.set(component, true);
-            _.forceRender?.();
-            return {
-                onRemove: () => {
-                    this._.components = this._.components.filter((c) => c !== component);
-                    this._.forceRender?.();
-                    portalElementCache.delete(component);
-                },
-                setVisibility: (v: boolean) => {
-                    _.componentVisibility.set(component, v);
-                    this._.forceRender?.();
-                },
-                isMounted: false,
-            };
         }
         _anvilGetComponents(): JsComponent[] {
             return this._.components;
@@ -972,6 +1016,7 @@ interface AnvilReactHooks {
     useComponentState<T>(initialState?: T): [T, (newState: T | ((oldState: T) => T)) => void];
     useDesignerApi(): AnvilReactDesignerApi;
     useInteraction(interaction: InteractionSpec): void;
+    useUnsetPropertyValue(prop: string, value: UnsetPropertyValue): void;
     useInlineEditRef<T extends HTMLElement>(
         propName: string,
         otherRef?: React.Ref<T>,
@@ -1011,6 +1056,7 @@ export const hooks: AnvilReactHooks = {
     useDesignerApi: () => React.useContext(HooksContext).useDesignerApi(),
     useComponentState: (...args) => React.useContext(HooksContext).useComponentState(...args),
     useInteraction: (...args) => React.useContext(HooksContext).useInteraction(...args),
+    useUnsetPropertyValue: (...args) => React.useContext(HooksContext).useUnsetPropertyValue(...args),
     useInlineEditRef: (...args) => React.useContext(HooksContext).useInlineEditRef(...args),
     useInlineEditSectionRef: (...args) => React.useContext(HooksContext).useInlineEditSectionRef(...args),
     useInlineEditRegionRef: (...args) => React.useContext(HooksContext).useInlineEditRegionRef(...args),

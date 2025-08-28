@@ -70,6 +70,7 @@ class WorkerEntry:
             n_secs = 1 # everyone else dies, like, fast.
         n_calls_at_timeout_set = self._n_calls
         self._timeout = threading.Timer(n_secs, lambda: self._start_draining(n_calls_at_timeout_set))
+        self._timeout.daemon = True
         self._timeout.start()
 
     def _cancel_timeout(self):
@@ -108,6 +109,7 @@ class WorkerEntry:
                 terminate_immediately = True
             else:
                 self._timeout = threading.Timer(CALL_TIMEOUT, lambda: self._hard_kill)
+                self._timeout.daemon = True
                 self._timeout.start()
         if terminate_immediately:
             self._hard_kill()
@@ -171,6 +173,9 @@ def retire_worker(worker, grace_period=CALL_TIMEOUT):
         entry.worker.terminate()
 
     with CACHE_LOCK:
+        if worker in retiring_workers:
+            return # Already retiring.
+
         entry = entries_by_worker.get(worker)
         if entry:
             print("Retiring %s" % entry)
@@ -178,6 +183,7 @@ def retire_worker(worker, grace_period=CALL_TIMEOUT):
             _remove_entry_from_cache(entry)
 
             t = retiring_workers[entry.worker] = threading.Timer(grace_period, do_kill)
+            t.daemon = True
             t.start()
     if not entry:
         print("Fast kill on timeout")
@@ -186,8 +192,10 @@ def retire_worker(worker, grace_period=CALL_TIMEOUT):
 
 anvil_downlink_host.retire_cached_worker = retire_worker
 
+last_persistent_worker = None
 
 def handle(msg):
+    global last_persistent_worker
     # We import Worker in local scope because both 'worker' and 'worker_cache' refer to each other, and some of the
     # obvious ways of doing that don't work in Python 2. Refactor with care.
     from .worker import Worker
@@ -218,7 +226,8 @@ def handle(msg):
                     "task": msg.get("command"),
                     "persist": {"key": persist_key, "version": app_version},
                 })
-                print("Launched new worker: %s" % worker)
+                print("Launched new persistent worker: %s" % worker)
+                last_persistent_worker = worker
                 entry = WorkerEntry(worker, cache_key, app_version)
                 entries_by_version[app_version] = entry
                 entries_by_worker[worker] = entry

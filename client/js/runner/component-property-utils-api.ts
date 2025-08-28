@@ -1,18 +1,20 @@
 import {
+    buildNativeClass,
     chainOrSuspend,
+    checkNumber,
     checkString,
     isTrue,
     pyBool,
     pyCallable,
     pyNone,
     pyNotImplemented,
-    pyNotImplementedType,
     pyObject,
     pyStr,
     pyTrue,
     pyType,
-    pyValueError,
+    pyTypeError,
     setUpModuleMethods,
+    Suspension,
     toJs,
     toPy,
 } from "@Sk";
@@ -40,7 +42,7 @@ export interface PyInstantiatorFunction extends pyCallable {
 interface PyInstantiatorFunctionConstructor extends pyType<PyInstantiatorFunction> {
     new (ifn: InstantiatorFunction): PyInstantiatorFunction;
 }
-const PyInstantiatorFunction: PyInstantiatorFunctionConstructor = Sk.abstr.buildNativeClass(
+export const PyInstantiatorFunction: PyInstantiatorFunctionConstructor = buildNativeClass(
     "anvil.InstantiatorFunction",
     {
         constructor: function PyInstantiatorFunction(ifn) {
@@ -48,8 +50,8 @@ const PyInstantiatorFunction: PyInstantiatorFunctionConstructor = Sk.abstr.build
         },
         slots: {
             tp$call(args, kwargs) {
-                if (args.length > 1 || (args[0] && !checkString(args[0]) && !Sk.builtin.checkNumber(args[0]))) {
-                    throw new pyValueError(
+                if (args.length > 1 || (args[0] && !checkString(args[0]) && !checkNumber(args[0]))) {
+                    throw new pyTypeError(
                         "Instantiator functions take one positional argument, which must be a string or number"
                     );
                 }
@@ -58,16 +60,13 @@ const PyInstantiatorFunction: PyInstantiatorFunctionConstructor = Sk.abstr.build
                     args[0] ? (toJs(args[0]) as string | number) : undefined
                 );
             },
-            tp$richcompare(
-                other: pyObject,
-                op: "Gt" | "GtE" | "Lt" | "LtE" | "Eq" | "NotEq"
-            ): pyNotImplementedType | pyBool | pyObject | boolean {
+            tp$richcompare(other, op) {
                 if (op === "Eq") {
                     const mySpec = this.anvil$underlyingInstantiator.anvil$instantiatorForForm;
                     const otherSpec =
                         other instanceof PyInstantiatorFunction &&
                         other.anvil$underlyingInstantiator.anvil$instantiatorForForm;
-                    return (
+                    return !!(
                         mySpec &&
                         otherSpec &&
                         mySpec.depId === otherSpec.depId &&
@@ -80,6 +79,8 @@ const PyInstantiatorFunction: PyInstantiatorFunctionConstructor = Sk.abstr.build
         },
     }
 );
+
+export const isPyInstantiatorFunction = (obj: any): obj is PyInstantiatorFunction => !!obj?.anvil$underlyingInstantiator;
 
 const getSpacingValueStyleString = (value: SpacingLength) =>
     typeof value === "number" || (typeof value === "string" && `${parseFloat(value)}` === value)
@@ -182,8 +183,8 @@ setUpModuleMethods("property_utils", pyPropertyUtilsApi, {
             parentForm: Component,
             formProperty: pyStr | ComponentConstructor | PyInstantiatorFunction,
             preferLiveDesign: pyBool
-        ) =>
-            formProperty?.anvil$underlyingInstantiator // It's already an instantiator? Passthrough!
+        ): PyInstantiatorFunction | Suspension =>
+            isPyInstantiatorFunction(formProperty)
                 ? formProperty
                 : chainOrSuspend(
                       getFormInstantiator(

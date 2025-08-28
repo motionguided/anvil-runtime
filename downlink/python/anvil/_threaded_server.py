@@ -2,6 +2,7 @@
 # Used in uplink and downlink, and now even in the PyPy sandbox.
 
 import os, random, string, json, re, sys, time, importlib, anvil
+from anvil_downlink_util.tracing import serialise_span_ctx, context, get_anvil_tracer_provider
 
 
 # For single-threaded implementations, re-entrant calls occupy the same thread,
@@ -28,17 +29,36 @@ class StackableLocal(object):
 
 _stackables = []
 
+
+class DummyLock(object):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+
 try:
     import threading
     ThreadLocal = threading.local
+    RLock = threading.RLock
     MULTITHREADED = True
 except:
     MULTITHREADED = False
     ThreadLocal = StackableLocal
+    RLock = DummyLock
 
 
 from . import  _serialise, _server
 from ._server import LazyMedia, registrations
+
+anvil_tracer = None
+
+def ensure_anvil_tracer():
+    global anvil_tracer
+    if not anvil_tracer:
+        anvil_tracer = get_anvil_tracer_provider().get_tracer(__name__)
+    return anvil_tracer
 
 string_type = str if sys.version_info >= (3,) else basestring
 
@@ -90,6 +110,7 @@ class LocalCallInfo(ThreadLocal):
         self.cache_update = {}
         self.dump_task_state = False
         self.enable_profiling = False
+        self.debug_context = {}
 
     def __getitem__(self, item):
         return self.session.__getitem__(item)
@@ -138,16 +159,17 @@ def _switch_session():
 default_app = anvil.app
 
 
-class LocalAppInfo(ThreadLocal):
+# We intentionally do NOT call _AppInfo.__init__ here,
+# because LocalAppInfo is just a thread-local proxy that delegates all attribute access
+# to the global default_app (except for thread-local overrides set via _setup).
+# Initializing _AppInfo would create unnecessary state on the proxy instance,
+# which is never used and could mask bugs. Only ThreadLocal.__init__ is needed.
+class LocalAppInfo(anvil._AppInfo, ThreadLocal):
+    def __init__(self):
+        pass
+
     def __getattr__(self, attr):
         return getattr(default_app, attr)
-
-    def __setattr__(self, key, value):
-        raise AttributeError("This object is read-only")
-
-    def _setup(self, environment={}, **kwargs):
-        self.__dict__.update(kwargs, environment=anvil._AppInfo._Environment(**environment))
-
 
 anvil.app = LocalAppInfo()
 
@@ -180,155 +202,164 @@ class IncomingRequest(_serialise.IncomingReqResp):
         _serialise.IncomingReqResp.__init__(self, json, remote_is_trusted=remote_is_trusted)
 
     def execute(self):
+        ctx = context.get_current()
         def make_call():
-            call_info.call_id = self.json.get('id')
-            call_info.stack_id = self.json.get('call-stack-id', None)
-            call_info.session_id = self.json.get('session-id')
+            context.attach(ctx)
+            with ensure_anvil_tracer().start_as_current_span("Make call"):
+                call_info.call_id = self.json.get('id')
+                call_info.stack_id = self.json.get('call-stack-id', None)
+                call_info.session_id = self.json.get('session-id')
+                call_info.debug_context = {"paused": self.json.get("paused", False)}
 
-            breakpoints = self.json.get('breakpoints')
-            if breakpoints:
-                file_prefix = self.get_file_prefix() if self.get_file_prefix else ""
-                try:
-                    from anvil import _debugger
-                    _debugger.start_debugging(call_info.call_id, breakpoints, file_prefix, self.json.get("step-in", False))
-                except ImportError:
-                    print("Could not start debugger. Ignoring breakpoints.")
-            sjson = self.json.get('sessionData', {'session': None, 'objects': []})
-            call_info.session = None
-            call_info.enable_profiling = self.json.get('enable-profiling', False)
-            if call_info.enable_profiling:
-                call_info.profile = {
-                    "origin": "Server (Python)",
-                    "description": "Python _threaded_server execution",
-                    "start-time": time.time()*1000,
-                }
-            call_info.cache_filter = _server.get_liveobject_cache_filter_spec([self.json.get('args'), self.json.get('kwargs')])
-            call_info.cache_update = {}
-            call_info.dump_task_state = self.dump_task_state
-            call_context._setup(self.json.get('client', {}), self.json.get('call-stack'))
-            anvil.app._setup(**self.json.get('app-info', {}))
-            if self.setup_task_state:
-                self.setup_task_state(call_info.call_id, True)
-            import_complete = False
-            try:
-                import_duration = None
-                if self.import_modules:
-                    import_duration = self.import_modules()
-                import_complete = True
-
-                # Now we've imported enough to deserialise custom types
-                self.reconstruct_remaining_data()
-                call_info.session = _server._reconstruct_objects(sjson, None, remote_is_trusted=self.remote_is_trusted).get("session", {})
-
-                if self.run_fn is not None:
-                    response, step_out = wrap_debugger(self.run_fn)
-                elif 'liveObjectCall' in self.json:
-                    loc = self.json['liveObjectCall']
-                    spec = dict(loc)
-
-                    if call_context.remote_caller is None:
-                        spec["source"] = "UNKNOWN"
-                    elif call_context.remote_caller.is_trusted:
-                        spec["source"] = "server"
-                    else:
-                        spec["source"] = "client"
-
-                    del spec["method"]
-                    backend = loc['backend']
-                    if backend not in backends:
-                        raise Exception("No such LiveObject backend: " + repr(backend))
-                    inst = backends[backend](spec)
-                    method = getattr(inst, loc['method'])
-
-                    call_info.cache_filter.setdefault(backend, set()).add(spec['id'])
-
-                    response, step_out = wrap_debugger(method, *self.json['args'], **self.json['kwargs'])
-                else:
-                    command = self.json['command']
-                    for reg in registrations:
-                        m = re.match(reg, command)
-                        if m and len(m.group(0)) == len(command):
-                            response, step_out = wrap_debugger(registrations[reg], *self.json["args"], **self.json["kwargs"])
-                            break
-                    else:
-                        if self.json.get('stale-uplink?'):
-                            raise _server.UplinkDisconnectedError({'type': 'anvil.server.UplinkDisconnectedError',
-                                                                   'message':'The uplink server for "%s" has been disconnected' % command})
-
-                        else:
-                            raise _server.NoServerFunctionError({'type': 'anvil.server.NoServerFunctionError',
-                                                                 'message': 'No server function matching "%s" has been registered' % command})
-
-                def err(*args):
-                    raise Exception("Cannot save DataMedia objects in anvil.server.session")
-
-                try:
-                    sjson = _server.fill_out_media({'session': call_info.session}, err, remote_is_trusted=True)
-                    json.dumps(sjson)
-                except TypeError as e:
-                    raise _server.SerializationError("Tried to store illegal value in a anvil.server.session. " + e.args[0])
-                except _server.SerializationError as e:
-                    raise _server.SerializationError("Tried to store illegal value in a anvil.server.session. " + e.args[0])
-
-                resp = {"id": self.json["id"], "response": response, "sessionData": sjson, "cacheUpdates": call_info.cache_update, "importDuration": import_duration}
-
-                if call_info.enable_profiling:
-                    call_info.profile["end-time"] = time.time()*1000
-                    resp["profile"] = call_info.profile
-
-                if step_out:
-                    resp["stepOut"] = True
-
-                _server.fill_out_cap_updates(resp, self.capabilities)
-
-                if self.dump_task_state:
+                breakpoints = self.json.get('breakpoints')
+                if breakpoints:
+                    file_prefix = self.get_file_prefix() if self.get_file_prefix else ""
                     try:
-                        task_state = dict(anvil.server.task_state)
-                        tjson = _server.fill_out_media({'taskState': task_state}, err, remote_is_trusted=True)
-                        json.dumps(tjson)
-                        resp['taskState'] = task_state
-                    except (TypeError, _server.SerializationError):
-                        pass
-
+                        from anvil import _debugger
+                        if not self.json.get("paused", False):
+                            _debugger.start_debugging(call_info.call_id, breakpoints, file_prefix, self.json.get("step-in", False))
+                    except ImportError:
+                        if call_context.type != "uplink":
+                            print("Could not start debugger. Ignoring breakpoints.")
+                sjson = self.json.get('sessionData', {'session': None, 'objects': []})
+                call_info.session = None
+                call_info.enable_profiling = self.json.get('enable-profiling', False)
+                if call_info.enable_profiling:
+                    call_info.profile = {
+                        "origin": "Server (Python)",
+                        "description": "Python _threaded_server execution",
+                        "start-time": time.time()*1000,
+                    }
+                call_info.cache_filter = _server.get_liveobject_cache_filter_spec([self.json.get('args'), self.json.get('kwargs')])
+                call_info.cache_update = {}
+                call_info.dump_task_state = self.dump_task_state
+                call_context._setup(self.json.get('client', {}), self.json.get('call-stack'))
+                anvil.app._setup(**self.json.get('app-info', {}))
+                if self.setup_task_state:
+                    self.setup_task_state(call_info.call_id, True)
+                import_complete = False
                 try:
-                    send_reqresp(resp, remote_is_trusted=call_context.remote_caller.is_trusted)
-                except _server.SerializationError as e:
-                    raise _server.SerializationError("Cannot serialize return value from function. " + str(e))
-            except SendNoResponse:
-                pass
-            except:
+                    import_duration = None
+                    if self.import_modules:
+                        import_duration = self.import_modules()
+                    import_complete = True
 
-                e = _server._report_exception(self.json["id"])
+                    # Now we've imported enough to deserialise custom types
+                    self.reconstruct_remaining_data()
+                    call_info.session = _server._reconstruct_objects(sjson, None, remote_is_trusted=self.remote_is_trusted).get("session", {})
 
-                if self.dump_task_state:
+                    if self.run_fn is not None:
+                        response, step_out = wrap_debugger(self.run_fn)
+                    elif 'liveObjectCall' in self.json:
+                        loc = self.json['liveObjectCall']
+                        spec = dict(loc)
+
+                        if call_context.remote_caller is None:
+                            spec["source"] = "UNKNOWN"
+                        elif call_context.remote_caller.is_trusted:
+                            spec["source"] = "server"
+                        else:
+                            spec["source"] = "client"
+
+                        del spec["method"]
+                        backend = loc['backend']
+                        if backend not in backends:
+                            raise Exception("No such LiveObject backend: " + repr(backend))
+                        inst = backends[backend](spec)
+                        method = getattr(inst, loc['method'])
+
+                        call_info.cache_filter.setdefault(backend, set()).add(spec['id'])
+
+                        response, step_out = wrap_debugger(method, *self.json['args'], **self.json['kwargs'])
+                    else:
+                        command = self.json['command']
+                        for reg in registrations:
+                            m = re.match(reg, command)
+                            if m and len(m.group(0)) == len(command):
+                                response, step_out = wrap_debugger(registrations[reg], *self.json["args"], **self.json["kwargs"])
+                                break
+                        else:
+                            if self.json.get('stale-uplink?'):
+                                raise _server.UplinkDisconnectedError({'type': 'anvil.server.UplinkDisconnectedError',
+                                                                       'message':'The uplink server for "%s" has been disconnected' % command})
+
+                            else:
+                                raise _server.NoServerFunctionError({'type': 'anvil.server.NoServerFunctionError',
+                                                                     'message': 'No server function matching "%s" has been registered' % command})
+
                     def err(*args):
                         raise Exception("Cannot save DataMedia objects in anvil.server.session")
 
                     try:
-                        task_state = dict(anvil.server.task_state)
-                        tjson = _server.fill_out_media({'taskState': task_state}, err, remote_is_trusted=True)
-                        json.dumps(tjson)
-                    except (TypeError, _server.SerializationError):
-                        pass
-                    else:
-                        e['taskState'] = task_state
+                        sjson = _server.fill_out_media({'session': call_info.session}, err, remote_is_trusted=True)
+                        json.dumps(sjson)
+                    except TypeError as e:
+                        raise _server.SerializationError("Tried to store illegal value in a anvil.server.session. " + e.args[0])
+                    except _server.SerializationError as e:
+                        raise _server.SerializationError("Tried to store illegal value in a anvil.server.session. " + e.args[0])
 
-                if not import_complete:
-                    e['moduleLoadFailed'] = True
+                    resp = {"id": self.json["id"], "response": response, "sessionData": sjson, "cacheUpdates": call_info.cache_update, "importDuration": import_duration}
 
-                try:
-                    send_reqresp(e)
+                    if call_info.enable_profiling:
+                        call_info.profile["end-time"] = time.time()*1000
+                        resp["profile"] = call_info.profile
+
+                    if step_out:
+                        resp["stepOut"] = True
+
+                    _server.fill_out_cap_updates(resp, self.capabilities)
+
+                    if self.dump_task_state:
+                        try:
+                            task_state = dict(anvil.server.task_state)
+                            tjson = _server.fill_out_media({'taskState': task_state}, err, remote_is_trusted=True)
+                            json.dumps(tjson)
+                            resp['taskState'] = task_state
+                        except (TypeError, _server.SerializationError):
+                            pass
+
+                    try:
+                        send_reqresp(resp, remote_is_trusted=call_context.remote_caller.is_trusted)
+                    except _server.SerializationError as e:
+                        raise _server.SerializationError("Cannot serialize return value from function. " + str(e))
+                except SendNoResponse:
+                    pass
                 except:
-                    trace = "\ncalled from ".join(["%s:%s" % (t[0], t[1]) for t in e["error"]["trace"]])
-                    console_output.write(("Failed to report exception: %s: %s\nat %s\n" % (e["error"]["type"], e["error"]["message"], trace)).encode("utf-8"))
-                    console_output.flush()
-            finally:
-                if self.setup_task_state:
-                    self.setup_task_state(call_info.call_id, False)
-                if breakpoints:
-                    from anvil import _debugger
-                    _debugger.stop_debugging(call_info.call_id)
-                self.complete()
+
+                    e = _server._report_exception(self.json["id"])
+
+                    if self.dump_task_state:
+                        def err(*args):
+                            raise Exception("Cannot save DataMedia objects in anvil.server.session")
+
+                        try:
+                            task_state = dict(anvil.server.task_state)
+                            tjson = _server.fill_out_media({'taskState': task_state}, err, remote_is_trusted=True)
+                            json.dumps(tjson)
+                        except (TypeError, _server.SerializationError):
+                            pass
+                        else:
+                            e['taskState'] = task_state
+
+                    if not import_complete:
+                        e['moduleLoadFailed'] = True
+
+                    try:
+                        send_reqresp(e)
+                    except:
+                        trc = "\ncalled from ".join(["%s:%s" % (t[0], t[1]) for t in e["error"]["trace"]])
+                        console_output.write(("Failed to report exception: %s: %s\nat %s\n" % (e["error"]["type"], e["error"]["message"], trc)).encode("utf-8"))
+                        console_output.flush()
+                finally:
+                    if self.setup_task_state:
+                        self.setup_task_state(call_info.call_id, False)
+                    if breakpoints:
+                        try:
+                            from anvil import _debugger
+                            _debugger.stop_debugging(call_info.call_id)
+                        except ImportError:
+                            pass
+                    self.complete()
 
         if MULTITHREADED:
             threading.Thread(target=make_call).start()
@@ -412,9 +443,15 @@ def do_call(args, kwargs, fn_name=None, live_object=None): # Yes, I do mean args
             global_debugger.step_to_level = None
         else:
             step_in = False
+        
+        if global_debugger and global_debugger.paused:
+            paused = True
+        else:
+            paused = call_info.debug_context.get("paused", False)
 
         req = {'type': 'CALL', 'id': id, 'args': args, 'kwargs': kwargs,
-               'call-stack-id': call_info.stack_id, 'originating-call': call_info.call_id, 'step-in': step_in}
+               'call-stack-id': call_info.stack_id, 'originating-call': call_info.call_id, 'step-in': step_in, 'paused': paused,
+               'span-ctx': serialise_span_ctx()}
 
         if live_object:
             req["liveObjectCall"] = { k: live_object._spec[k] for k in ["id", "backend", "mac", "permissions"] }

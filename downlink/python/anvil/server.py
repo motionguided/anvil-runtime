@@ -47,7 +47,7 @@ from ._server import (register,
                       get_subscriptions,
                       invalidate_client_objects,
                       _on_invalidate_client_objects,
-                      server_side_method)
+                      server_method)
 
 from . import _threaded_server, _server
 
@@ -148,7 +148,7 @@ task_state = _server.NotABackgroundTaskState()
 
 #!defModuleAttr(anvil.server)!1: {name: "session", pyType: "dict instance", description: "A dictionary that contains information about a specific session. It can store anything that a server function can return, except for Media objects."}
 
-#!defFunction(anvil.server [uplink],#,key,[init_session=None],[quiet=False])!2: {$doc: "Connect your uplink script to your anvil app.", anvil$args: {keys: "The key is a unique string and should be kept private. You can generate a new key from inside your anvil app.", init_session: "If you pass a function to the init_session keyword parameter, it will be called after the uplink connection is established, but before any other interaction", quiet: "Set quiet to True to surpress connection output. Errors will still be displayed."}, anvil$helpLink: "/docs/uplink"} ["connect"]
+#!defFunction(anvil.server [uplink],#,key,[url="wss://anvil.works/uplink"],[quiet=False],[init_session=None],[extra_headers=],[default_log_level="INFO"])!2: {$doc: "Connect your uplink script to your anvil app.", anvil$args: {key: "The key is a unique string that should be kept private. You can generate a new key from within your Anvil app.", url: "The URL of the Anvil uplink server endpoint. Override this if you are connecting to an Anvil Enterprise server or Anvil App Server.", quiet: "Equivalent to default_log_level='WARNING'.", init_session: "If you pass a function to the init_session keyword parameter, it will be called after the uplink connection is established but before any other interaction.", extra_headers: "A dictionary of headers to send with each request. If you pass a function, it will be called before each request, and its dict return value used as the headers.", default_log_level: "The log level to use for logging, unless overridden by the `quiet` parameter or the `ANVIL_LOG_LEVEL` environment variable. Can be one of `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL`." }, anvil$helpLink: "/docs/uplink"} ["connect"]
 
 #!defFunction(anvil.server [uplink],#,)!2: {$doc: "Disconnect your uplink script from your anvil app. Your script is then free to call `anvil.server.connect()` with the same uplink key or a new uplink key."} ["disconnect"]
 

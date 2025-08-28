@@ -13,6 +13,7 @@ export const {
     useDesignerInteractionRef,
     useDropping,
     useRegionInteractionRef,
+    useUnsetPropertyValue,
 } = hooks;
 
 export type { DropZoneSpec, AnvilReactDesignerApi, DropZoneProps } from "./core";

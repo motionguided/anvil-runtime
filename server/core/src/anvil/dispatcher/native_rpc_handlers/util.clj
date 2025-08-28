@@ -97,6 +97,7 @@
                                                    :tags tags}
                              (with-native-bindings-from-request request return-path
                                (tracing/with-parent-span tracing-span
+                                 (worker-pool/set-task-tracing-span! tracing-span)
                                  (binding [*profiles* (atom [])
                                            *lo-cache-updates* (atom nil)]
                                    (try

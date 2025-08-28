@@ -160,12 +160,12 @@ export const anvil_property: AnvilPropertyConstructor = buildNativeClass("anvil.
     getsets: {
         fget: {
             $get() {
-                return this.property.tp$getattr(s_fget);
+                return this.property.tp$getattr(s_fget)!;
             },
         },
         fset: {
             $get() {
-                return this.property.tp$getattr(s_fset);
+                return this.property.tp$getattr(s_fset)!;
             },
         },
     },

@@ -1,5 +1,6 @@
 (ns anvil.runtime.tables.v2.updates
-  (:require [slingshot.slingshot :refer :all]
+  (:require [anvil.runtime.tables.v2.jdbc-trace :as jdbc-t]
+            [slingshot.slingshot :refer :all]
             [anvil.runtime.tables.v2.search :as search-v2]
             [anvil.runtime.tables.v2.table-types :as table-types]
             [anvil.runtime.tables.v2.util :as util-v2]
@@ -84,16 +85,16 @@
       (when-not can-auto-create?
         (throw+ e))
       (util/with-db-transaction
-        [db db]
+        [db db :repeatable-read]
         (let [[col-name col-type] (::would-create-column e)
-              {:keys [columns]} (first (jdbc/query db ["SELECT columns FROM app_storage_tables WHERE id = ?" table-id]))]
-          (when-not (some #(= (:name %) col-name) columns)
+              {:keys [columns]} (first (jdbc-t/query db ["SELECT columns FROM app_storage_tables WHERE id = ?" table-id]))]
+          (when-not (some #(= (:name %) col-name) (vals columns))
             ;; if we haven't lost the race:
-            (jdbc/execute! db ["UPDATE app_storage_tables SET columns=?::jsonb WHERE id = ?"
-                               (-> columns
-                                   (assoc (util-v2/generate-column-id) (assoc (table-types/make-db-column-from-type col-type) :name col-name))
-                                   (util/write-json-str))
-                               table-id])
+            (jdbc-t/execute! db ["UPDATE app_storage_tables SET columns=?::jsonb WHERE id = ?"
+                                 (-> columns
+                                     (assoc (util-v2/generate-column-id) (assoc (table-types/make-db-column-from-type col-type) :name col-name))
+                                     (util/write-json-str))
+                                 table-id])
             (rpc-util/*rpc-println* (str "Automatically creating column " (pr-str col-name) " (" (table-types/get-type-name tables col-type) ")")))))
       ;; TODO invalidate the cache here
       (resolving-columns db can-auto-create? (util-v2/get-tables (::util-v2/table-mapping tables)) table-spec f))
@@ -101,14 +102,14 @@
       (util/with-db-transaction [db db]
         (let [[col-id {unresolved-type :type} new-type] (::would-resolve-column e)
               col-id (keyword col-id)
-              {:keys [columns]} (first (jdbc/query db ["SELECT columns FROM app_storage_tables WHERE id = ?" table-id]))
+              {:keys [columns]} (first (jdbc-t/query db ["SELECT columns FROM app_storage_tables WHERE id = ?" table-id]))
               ;;_ (log/trace "RESOLVING COLUMN:" col-id columns unresolved-type new-type)
               new-columns (into {} (for [[id {:keys [name type table_id] :as col}] columns]
                                      [id (cond-> col
                                                  (and (= id col-id) (= type unresolved-type))
                                                  (merge (table-types/make-db-column-from-type new-type)))]))]
           (when (not= new-columns columns)
-            (jdbc/execute! db ["UPDATE app_storage_tables SET columns=?::jsonb WHERE id = ?" new-columns table-id])
+            (jdbc-t/execute! db ["UPDATE app_storage_tables SET columns=?::jsonb WHERE id = ?" new-columns table-id])
             (rpc-util/*rpc-print* (str "Type of column " (pr-str (get-in columns [col-id :name])) " is now " (table-types/get-type-name tables new-type))))))
       ;; TODO invalidate the cache here
       (resolving-columns db can-auto-create? (util-v2/get-tables (::util-v2/table-mapping tables)) table-spec f))))
@@ -133,7 +134,7 @@
 (defn- delete-media! [db-c media-ids]
   (when-not (empty? media-ids)
     (log/trace "Deleting media:" media-ids)
-    (-> (jdbc/query db-c ["WITH lo_sizes AS (SELECT object_id, get_lo_size(object_id) as bytes_removed FROM app_storage_media
+    (-> (jdbc-t/query db-c ["WITH lo_sizes AS (SELECT object_id, get_lo_size(object_id) as bytes_removed FROM app_storage_media
                                               WHERE data IS NULL AND object_id = ANY(?)),
                                 blob_deletions AS (SELECT lo_unlink(object_id), object_id FROM lo_sizes),
                                 lo_record_deletions AS (DELETE FROM app_storage_media WHERE object_id IN (SELECT object_id FROM blob_deletions)),
@@ -141,7 +142,7 @@
                                                   WHERE data IS NOT NULL AND object_id = ANY(?)),
                                 data_record_deletions AS (DELETE FROM app_storage_media WHERE object_id IN (SELECT object_id FROM data_sizes))
                             SELECT bytes_removed FROM lo_sizes UNION SELECT bytes_removed FROM data_sizes"
-                          (long-array media-ids) (long-array media-ids)])
+                            (long-array media-ids) (long-array media-ids)])
         (first) (:bytes_removed))))
 
 (defn- delete-displaced-media! [db-c table-id rows]
@@ -157,7 +158,7 @@
                                                    ") AS data FROM app_storage_data WHERE table_id=? AND id = ANY(?)")
                                               (concat (mapcat (fn [key] [key key]) all-mentioned-columns)
                                                       [table-id (long-array (map :row-id rows-displacing-media))])]
-          results (jdbc/query db-c (cons MEDIA-FETCH-SQL media-fetch-args))
+          results (jdbc-t/query db-c (cons MEDIA-FETCH-SQL media-fetch-args))
 
           rows-by-id (into {} (for [{:keys [row-id] :as row} rows-displacing-media] [row-id row]))
           media-ids (mapcat (fn [{:keys [row_id data]}]
@@ -187,8 +188,8 @@
                         :when media]
                     (let [size (alength @bytes)]
                       (quota/decrement-if-possible-c! quota-ctx db-c :db-bytes size)
-                      (let [object-id (:object_id (first (jdbc/query db-c ["INSERT INTO app_storage_media(content_type, name, table_id, row_id, column_id, data) VALUES (?, ?, ?, ?, ?, ?) RETURNING object_id"
-                                                                           (dispatcher-types/getContentType media) (dispatcher-types/getName media) table-id row-id (util/preserve-slashes col-id) @bytes])))]
+                      (let [object-id (:object_id (first (jdbc-t/query db-c ["INSERT INTO app_storage_media(content_type, name, table_id, row_id, column_id, data) VALUES (?, ?, ?, ?, ?, ?) RETURNING object_id"
+                                                                             (dispatcher-types/getContentType media) (dispatcher-types/getName media) table-id row-id (util/preserve-slashes col-id) @bytes])))]
                         [col-id object-id]))))]
         (-> row
             (dissoc :media-to-write)
@@ -228,7 +229,8 @@
         (if-not RESTRICT-SQL
           ;; Updating normally: Create virtual table, update from it
           (let [{:keys [updated old_bytes new_bytes]}
-                (-> (jdbc/query db-c ["WITH new_data AS (SELECT * FROM jsonb_to_recordset(?::jsonb) AS x(id bigint, data jsonb)),
+                (-> (util/with-metric-query "v2 update without restrictions"
+                      (jdbc-t/query db-c ["WITH new_data AS (SELECT * FROM jsonb_to_recordset(?::jsonb) AS x(id bigint, data jsonb)),
                                             updates AS (SELECT table_id, nd.id, nd.data AS new_data, od.data AS old_data FROM app_storage_data AS od, new_data AS nd
                                                           WHERE table_id=? AND od.id = nd.id FOR UPDATE),
                                             updated_rows AS (UPDATE app_storage_data SET data=app_storage_data.data||nd.new_data
@@ -236,7 +238,7 @@
                                                                   WHERE app_storage_data.table_id=? AND app_storage_data.id=nd.id
                                                                   RETURNING octet_length(app_storage_data.data::text) AS new_bytes, (SELECT octet_length(old_data::text) FROM updates AS old WHERE table_id=? AND old.id=app_storage_data.id) AS old_bytes)
                                                SELECT COUNT(*) AS updated, SUM(new_bytes) AS new_bytes, SUM(old_bytes) AS old_bytes FROM updated_rows"
-                                      data-json table-id table-id table-id])
+                                          data-json table-id table-id table-id]))
                     (first))]
             (log/trace "Updated" updated old_bytes new_bytes)
             (when (< updated (count rows))
@@ -248,7 +250,8 @@
           ;; Updating a view with restrictions: it's a little bit complicated. We need to join the virtual table
           ;; of new results back against the input data to get the final new data, then compute the view, then update that
           (let [{:keys [found matched updated old_bytes new_bytes]}
-                (-> (jdbc/query db-c (concat [(str "WITH joined_data AS (SELECT o.data as old_data, o.data||x.data as data, x.id
+                (-> (util/with-metric-query "v2 update with restrictions"
+                      (jdbc-t/query db-c (concat [(str "WITH joined_data AS (SELECT o.data as old_data, o.data||x.data as data, x.id
                                                                       FROM jsonb_to_recordset(?::jsonb) AS x(id bigint, data jsonb)
                                                                            JOIN app_storage_data AS o ON (o.id = x.id)
                                                                       WHERE o.table_id = ?),
@@ -262,7 +265,7 @@
                                                        (SELECT COUNT(*) FROM updated_rows) AS updated,
                                                        (SELECT SUM(octet_length(old_data::text)) FROM joined_data) AS old_bytes,
                                                        (SELECT SUM(octet_length(data::text)) FROM joined_data) AS new_bytes")
-                                              data-json table-id] restrict-args [table-id]))
+                                                  data-json table-id] restrict-args [table-id])))
                     (first))]
             (when (< found (count rows))
               (log/trace "Rolling back...")
@@ -312,11 +315,11 @@
     (util/with-db-transaction [db-c db-c :repeatable-read]
       (quota/decrement-if-possible-c! quota-ctx db-c :db-rows (count rows))
       (let [rows (create-media-records! db-c table-id quota-ctx rows)
-            new-rows (jdbc/query db-c (concat [(str "WITH new_data AS (SELECT value AS data, ordinality FROM jsonb_array_elements(?::jsonb) WITH ORDINALITY)
-                                                     INSERT INTO app_storage_data (table_id,data)
-                                                     (SELECT ? as table_id, data FROM new_data " (when RESTRICT-SQL (str "WHERE " RESTRICT-SQL)) " ORDER BY ordinality)
-                                                     RETURNING id, octet_length(app_storage_data.data::text) AS n_bytes")
-                                               (util/write-json-str (map :reduced-values rows)) table-id] restrict-args))
+            new-rows (jdbc-t/query db-c (concat [(str "WITH new_data AS (SELECT value AS data, ordinality FROM jsonb_array_elements(?::jsonb) WITH ORDINALITY)
+                                                       INSERT INTO app_storage_data (table_id,data)
+                                                       (SELECT ? as table_id, data FROM new_data " (when RESTRICT-SQL (str "WHERE " RESTRICT-SQL)) " ORDER BY ordinality)
+                                                       RETURNING id, octet_length(app_storage_data.data::text) AS n_bytes")
+                                                 (util/write-json-str (map :reduced-values rows)) table-id] restrict-args))
             _ (when-not (= (count new-rows) (count rows))
                 (throw+ (util-v2/general-tables-error "Data does not match view constraints")))
             _ (log/debug "v2 Insert rows to table" table-id (map :n_bytes new-rows) "bytes")
@@ -327,7 +330,7 @@
                         (assoc row :row-id id))
                       rows new-rows)]
         (doseq [{:keys [row-id created-oids]} rows]
-          (jdbc/execute! db-c ["UPDATE app_storage_media SET row_id = ? WHERE object_id = ANY(?)" row-id (int-array created-oids)]))
+          (jdbc-t/execute! db-c ["UPDATE app_storage_media SET row_id = ? WHERE object_id = ANY(?)" row-id (int-array created-oids)]))
         (map :row-id rows)))))
 
 (defn- RETURN-MEDIA [tables {table-id :id :as view-spec}]
@@ -347,10 +350,10 @@
 
         ;; TODO only go transactional when (not-empty media-column-ids)
         (util/with-db-transaction [db-c db-c :repeatable-read]
-          (let [result (jdbc/query db-c (concat [(str "DELETE FROM app_storage_data WHERE table_id=? AND id = ANY(?) RETURNING "
-                                                      GET-MEDIA-SQL ", octet_length(data::text) AS n_bytes")
-                                                 table-id (long-array row-ids)]
-                                                get-media-args))
+          (let [result (jdbc-t/query db-c (concat [(str "DELETE FROM app_storage_data WHERE table_id=? AND id = ANY(?) RETURNING "
+                                                        GET-MEDIA-SQL ", octet_length(data::text) AS n_bytes")
+                                                   table-id (long-array row-ids)]
+                                                  get-media-args))
 
                 deleted-media-ids (mapcat #(filter identity (.getArray ^Array (:media %))) result)
                 n-rows-deleted (count result)
@@ -370,11 +373,11 @@
         [GET-MEDIA-SQL get-media-args] (RETURN-MEDIA tables view-spec)]
     ;; TODO only go transactional when (not-empty media-column-ids)
     (util/with-db-transaction [db-c db-c :repeatable-read]
-      (let [result (jdbc/query db-c (concat [(str "DELETE FROM app_storage_data WHERE table_id=? AND " QUERY-SQL
-                                                  " RETURNING " GET-MEDIA-SQL ", octet_length(data::text) AS n_bytes")
-                                             table-id]
-                                            query-args
-                                            get-media-args))
+      (let [result (jdbc-t/query db-c (concat [(str "DELETE FROM app_storage_data WHERE table_id=? AND " QUERY-SQL
+                                                    " RETURNING " GET-MEDIA-SQL ", octet_length(data::text) AS n_bytes")
+                                               table-id]
+                                              query-args
+                                              get-media-args))
             deleted-media-ids (mapcat #(filter identity (.getArray ^Array (:media %))) result)
             n-rows-deleted (count result)
             n-bytes-deleted (+ (or (delete-media! db-c deleted-media-ids) 0)

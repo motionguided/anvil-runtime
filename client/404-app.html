@@ -9,23 +9,54 @@
     <link rel="stylesheet" href="{{cdn-origin}}/runtime/css/bootstrap.css?buildTime=0">
     <link rel="stylesheet" href="{{cdn-origin}}/runtime/css/bootstrap-theme.min.css?buildTime=0">
 
-    <script src="{{cdn-origin}}/runtime/node_modules/html5-boilerplate/dist/js/vendor/modernizr-3.8.0.min.js?buildTime=0"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600;1,700&display=swap" rel="stylesheet">
+
+    <script src="{{cdn-origin}}/runtime/js/lib/modernizr-3.8.0.min.js?buildTime=0"></script>
 
 
-    <script src="{{cdn-origin}}/runtime/node_modules/jquery/dist/jquery.min.js?buildTime=0"></script>
-    <script src="{{cdn-origin}}/runtime/node_modules/bootstrap/dist/js/bootstrap.min.js?buildTime=0"></script>
+    <script src="{{cdn-origin}}/runtime/js/lib/jquery.min.js?buildTime=0"></script>
+    <script src="{{cdn-origin}}/runtime/js/lib/bootstrap.min.js?buildTime=0"></script>
 
 </head>
+<style>
+    body {
+        font-family: "Poppins", sans-serif;
+        background-color: #F7FDFF;
+    }
+
+    .box {
+        display: flex;
+        flex-direction: column;
+        gap: 2rem;
+        align-items: center;
+        text-align: center;
+        padding: 30px;
+        background-color: #F9F2F4;
+        border-radius: 10px;
+    }
+
+    .alert-heading {
+        font-size: 20px;
+    }
+
+    .warning-icon {
+        max-width: 70px;
+        fill: #FF0049;
+    }
+
+
+</style>
 <body>
 
-    <div class="panel panel-default warning-not-found" style="margin: 20%">
-        <div class="panel-body">
-            <div class="alert alert-danger" role="alert"><b>We could not find an app that matched your request.</b></div>
+    <div class="warning-not-found" style="margin: 20%">
+        <div class="box">
+            <svg class="warning-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--!Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2025 Fonticons, Inc.--><path d="M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512zm0-384c13.3 0 24 10.7 24 24l0 112c0 13.3-10.7 24-24 24s-24-10.7-24-24l0-112c0-13.3 10.7-24 24-24zM224 352a32 32 0 1 1 64 0 32 32 0 1 1 -64 0z"/></svg>
+            <div class="alert-heading" role="alert"><b>We could not find an app that matched your request.</b></div>
 
             <p>
-              You may have copied the URL for this app incorrectly, 
-              or this app may have been deleted or withdrawn. You may 
-              also have been logged out, in which case refreshing this page might help.
+              You may have copied the URL for this app incorrectly, or this app may have been deleted or withdrawn. You may also have been logged out, in which case refreshing this page might help.
             </p>
         </div>
     </div>

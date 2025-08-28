@@ -1,6 +1,6 @@
 "use strict";
 
-var PyDefUtils = require("PyDefUtils");
+import PyDefUtils from "PyDefUtils";
 
 /*#
 id: simplecanvas
@@ -12,7 +12,7 @@ description:
   The SimpleCanvas allows you to draw and modify shapes without having to worry about issues like animation timing.
 */
 
-module.exports = function(pyModule) {
+const SimpleCanvas = (pyModule) => {
 
     pyModule["SimpleCanvas"] = Sk.misceval.buildClass(pyModule, function($gbl, $loc) {
 
@@ -190,3 +190,5 @@ module.exports = function(pyModule) {
  *  - New events: shape_grab, shape_drag, shape_drop, shape_click
  *
  */
+
+export default SimpleCanvas;

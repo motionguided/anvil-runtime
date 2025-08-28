@@ -1,6 +1,6 @@
 "use strict";
 
-var PyDefUtils = require("PyDefUtils");
+import PyDefUtils from "PyDefUtils";
 import { validateChild } from "./Container";
 import { getCssPrefix } from "@runtime/runner/legacy-features";
 import { isInvisibleComponent } from "./helpers";
@@ -27,44 +27,56 @@ description: |
 
 */
 
-module.exports = (pyModule) => {
-
+const XYPanel = (pyModule) => {
     let panelId = 0;
 
     pyModule["XYPanel"] = PyDefUtils.mkComponentCls(pyModule, "XYPanel", {
         base: pyModule["ClassicContainer"],
 
-        properties: PyDefUtils.assembleGroupProperties(/*!componentProps(XYPanel)!1*/ ["layout", "layout_margin", "height", "appearance", "align", "tooltip", "user data"], {
-            height: {
-                set(s, e, v) {
-                    s._anvil.elements.holder.style.height = PyDefUtils.cssLength(v.toString());
+        properties: PyDefUtils.assembleGroupProperties(
+            /*!componentProps(XYPanel)!1*/ [
+                "layout",
+                "layout_margin",
+                "height",
+                "appearance",
+                "align",
+                "tooltip",
+                "user data",
+            ],
+            {
+                height: {
+                    set(s, e, v) {
+                        s._anvil.elements.holder.style.height = PyDefUtils.cssLength(v.toString());
+                    },
                 },
-            },
-            align: {
-                set(s, e, v) {
-                    v = v.toString();
-                    s._anvil.elements.outer.style.textAlign = v;
-                    s._anvil.updateHatching();
+                align: {
+                    set(s, e, v) {
+                        v = v.toString();
+                        s._anvil.elements.outer.style.textAlign = v;
+                        s._anvil.updateHatching();
+                    },
                 },
-            },
-            width: /*!componentProp(XYPanel):1*/ {
-                group: null,
-                deprecated: false,
-                name: "width",
-                type: "number",
-                nullable: true,
-                description: "Custom column widths in this panel",
-                defaultValue: Sk.builtin.none.none$,
-                pyVal: true,
-                important: false,
-                priority: 0,
-                set(s, e, v) {
-                    // todo - should support all units like jquery does
-                    s._anvil.elements.holder.style.width = Sk.builtin.checkNone(v) ? "100%" : PyDefUtils.cssLength(v.toString());
-                    s._anvil.updateHatching(v);
+                width: /*!componentProp(XYPanel):1*/ {
+                    group: null,
+                    deprecated: false,
+                    name: "width",
+                    type: "number",
+                    nullable: true,
+                    description: "Custom column widths in this panel",
+                    defaultValue: Sk.builtin.none.none$,
+                    pyVal: true,
+                    important: false,
+                    priority: 0,
+                    set(s, e, v) {
+                        // todo - should support all units like jquery does
+                        s._anvil.elements.holder.style.width = Sk.builtin.checkNone(v)
+                            ? "100%"
+                            : PyDefUtils.cssLength(v.toString());
+                        s._anvil.updateHatching(v);
+                    },
                 },
-            },
-        }),
+            }
+        ),
 
         events: PyDefUtils.assembleGroupEvents("X-Y panel", /*!componentEvents(XYPanel)!1*/ ["universal", "align"]),
 
@@ -95,11 +107,16 @@ module.exports = (pyModule) => {
         element({ width, height, ...props }) {
             // todo - should support all units like jquery does
             const prefix = getCssPrefix();
-            width = Sk.builtin.checkNone(width) ? " width: 100%;" : " width: " + PyDefUtils.cssLength(width.toString()) + ";";
-            height = "height: " + PyDefUtils.cssLength(height.toString()) + ";"
+            width = Sk.builtin.checkNone(width)
+                ? " width: 100%;"
+                : " width: " + PyDefUtils.cssLength(width.toString()) + ";";
+            height = "height: " + PyDefUtils.cssLength(height.toString()) + ";";
             return (
-                <PyDefUtils.OuterElement className={`${prefix}xy-panel anvil-container` }{...props}>
-                    <div refName="holder" className={`${prefix}holder xypanel-${panelId}`} style={"display: inline-block; position: relative;" + width + height}></div>
+                <PyDefUtils.OuterElement className={`${prefix}xy-panel anvil-container`} {...props}>
+                    <div
+                        refName="holder"
+                        className={`${prefix}holder xypanel-${panelId}`}
+                        style={"display: inline-block; position: relative;" + width + height}></div>
                 </PyDefUtils.OuterElement>
             );
         },
@@ -111,33 +128,26 @@ module.exports = (pyModule) => {
                 self._anvil.panelId = panelId++;
             });
 
-            /*!defMethod(_,component,[x=0],[y=0],[width=None])!2*/ "Add a component to this XYPanel, at the specified coordinates. If the component's width is not specified, uses the component's default width."
+            /*!defMethod(_,component,[x=0],[y=0],[width=None])!2*/ ("Add a component to this XYPanel, at the specified coordinates. If the component's width is not specified, uses the component's default width.");
             $loc["add_component"] = PyDefUtils.funcWithKwargs(function (kwargs, self, component) {
                 validateChild(component);
-                return Sk.misceval.chain(
-                    component.anvil$hooks.setupDom(),
-                    rawElement => {
-                        if (isInvisibleComponent(component)) {
-                            return pyModule["ClassicContainer"]._doAddComponent(self, component);
-                        }
-
-                        const { x, y, width } = kwargs;
-                        const celt = $(rawElement);
-                        celt.css({ position: "absolute", left: x || 0, top: y || 0, width: width || "" });
-                        self._anvil.elements.holder.appendChild(celt[0]);
-                        return pyModule["ClassicContainer"]._doAddComponent(self, component, kwargs);
+                return Sk.misceval.chain(component.anvil$hooks.setupDom(), (rawElement) => {
+                    if (isInvisibleComponent(component)) {
+                        return pyModule["ClassicContainer"]._doAddComponent(self, component);
                     }
-                );
+
+                    const { x, y, width } = kwargs;
+                    const celt = $(rawElement);
+                    celt.css({ position: "absolute", left: x || 0, top: y || 0, width: width || "" });
+                    self._anvil.elements.holder.appendChild(celt[0]);
+                    return pyModule["ClassicContainer"]._doAddComponent(self, component, kwargs);
+                });
             });
 
-            /*!defMethod(number)!2*/ "Get the width of this XYPanel, in pixels."
+            /*!defMethod(number)!2*/ ("Get the width of this XYPanel, in pixels.");
             $loc["get_width"] = new Sk.builtin.func((self) => Sk.ffi.remapToPy(self._anvil.element.outerWidth()));
         },
     });
-
-
-
-
 };
 
 /*!defClass(anvil,XYPanel,Container)!*/
@@ -149,3 +159,5 @@ module.exports = (pyModule) => {
  *  - Methods: add_component
  *
  */
+
+export default XYPanel;

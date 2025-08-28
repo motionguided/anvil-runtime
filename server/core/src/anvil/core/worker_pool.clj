@@ -11,7 +11,8 @@
            (java.time Instant)
            (java.io IOException)
            (java.text SimpleDateFormat)
-           (java.lang.management ThreadInfo)))
+           (java.lang.management ThreadInfo)
+           (io.opentelemetry.api.trace Span)))
 
 ;;(clj-logging-config.log4j/set-logger! :level :trace)
 
@@ -35,6 +36,12 @@
      (swap! thread-stats update (.getName (Thread/currentThread)) merge info)
      (.set task-info info))))
 
+(def ^:private task-trace (ThreadLocal.))
+(defn set-task-tracing-span! [^Span span]
+  (when span
+    (let [ctx (.getSpanContext span)]
+      (.set task-trace [(.getTraceId ctx) (.getSpanId ctx)]))))
+
 (defn run-one-task! [timeout]
   (let [[_ [task enqueue-time] tags]
         (locking TASK-LOCK
@@ -49,6 +56,7 @@
     (when task
       (metrics/observe! :api/task-queue-wait-seconds (/ (- start-time enqueue-time) 1e9) nil)
       (.set task-info nil)
+      (.set task-trace nil)
       (try
         (swap! n-threads-running inc)
         (swap! thread-stats update (.getName (Thread/currentThread)) assoc :last-run (System/currentTimeMillis))
@@ -58,7 +66,8 @@
         (finally
           (swap! n-threads-running dec)
           (let [execution-time-nanos (- (System/nanoTime) start-time)
-                task-info (.get task-info)]
+                task-info (.get task-info)
+                [trace-id span-id :as exemplar] (.get task-trace)]
             ;; TODO record usage by task
             (swap! thread-stats update (.getName (Thread/currentThread)) assoc :duration-ms (/ execution-time-nanos 1e6))
             (swap! task-queue (fn [[queue]] [(hrr-queue/hrr-penalise queue tags execution-time-nanos)]))
@@ -71,7 +80,7 @@
                         (if (not-empty tags)
                           (update-in stats [tag] update more-tags)
                           stats)))))
-            (metrics/observe! :api/task-execution-seconds (/ execution-time-nanos 1e9) task-info)))))))
+            (metrics/observe! :api/task-execution-seconds (/ execution-time-nanos 1e9) task-info exemplar)))))))
 
 (defn enqueue-one-task! [task tags]
   (when (not= tags [:anvil-http]) (log/trace "Task:" tags))

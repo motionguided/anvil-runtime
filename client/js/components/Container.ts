@@ -56,6 +56,25 @@ export const validateChild = (c: any, fn = "add_component") => {
     }
 };
 
+export function indexInRange(index: number | null | undefined, container: Container) {
+    if (index == null) {
+        return null;
+    }
+
+    const components = pyCall<pyList<Component>>(container.tp$getattr(s_get_components)).valueOf();
+    if (typeof index !== "number") {
+        return null;
+    }
+    if (index < 0) {
+        index += components.length;
+    }
+    if (index < 0 || index > components.length) {
+        // we probably can't throw an error here so just return the last index
+        return null;
+    }
+    return index;
+}
+
 interface ContainerConstructor extends ComponentConstructor {
     new (): Container;
 }
@@ -187,7 +206,6 @@ export const Container: ContainerConstructor = Sk.abstr.buildNativeClass("anvil.
         sk$solidBase: false,
     },
 });
-
 
 const CONTAINER_GET_COMPONENTS = typeLookup(Container, s_get_components);
 

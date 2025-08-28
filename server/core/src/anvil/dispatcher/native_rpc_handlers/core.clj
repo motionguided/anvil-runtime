@@ -32,7 +32,7 @@
             [anvil.dispatcher.native-rpc-handlers.users.util :as users-util]
             [anvil.runtime.tables.rpc :as tables]
             [anvil.runtime.tables.v2.rpc]
-            [medley.core :refer [find-first]]
+            [medley.core :refer [find-first map-vals]]
             [clojure.data.json :as json]
             [crypto.random :as random]))
 
@@ -42,6 +42,17 @@
     (if prefer_ephemeral_debug
       (or rpc-util/*app-origin* (app-data/get-app-origin rpc-util/*environment*))
       (or (app-data/get-app-origin rpc-util/*environment*) rpc-util/*app-origin*))))
+
+
+(defn- get-dep-config [type]
+  (let [app native-util/*app*
+        get-config (fn [dep-yaml]
+                     (merge
+                       (select-keys dep-yaml [:package_name])
+                       {:config (select-keys (:config dep-yaml) [type])}))]
+    (merge
+      (get-config app)
+      {:dependency_code (map-vals get-config (:dependency_code app))})))
 
 (def debug-rpc-handlers
   {"anvil.private.dummy_echo"                (native-util/wrap-native-fn (fn [& _]
@@ -122,6 +133,16 @@
                                                    (->> (:services native-util/*app*)
                                                         (find-first #(= path (:source %)))
                                                         :server_config))))
+
+   "anvil.private.get_dep_server_config"      (native-util/wrap-native-fn
+                                                (fn [_kws]
+                                                  (if native-util/*client-request?*
+                                                    (throw+ {:anvil/server-error "Cannot access server config from the client"
+                                                             :type               "anvil.server.PermissionDenied"}))
+                                                  (get-dep-config :server)))
+
+   "anvil.private.get_dep_client_config"      (native-util/wrap-native-fn
+                                                (fn [_kws] (get-dep-config :client)))
 
    "anvil.private.enable_profiling"          (native-util/wrap-native-fn
                                                (fn [_kwargs]

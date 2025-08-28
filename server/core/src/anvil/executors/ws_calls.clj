@@ -12,7 +12,8 @@
             [anvil.runtime.app-data :as app-data]
             [anvil.runtime.sessions :as sessions]
             [anvil.runtime.util :as runtime-util]
-            [anvil.core.tracing :as tracing]))
+            [anvil.core.tracing :as tracing])
+  (:import (io.opentelemetry.api.trace Span)))
 
 (clj-logging-config.log4j/set-logger! :level :info)
 
@@ -34,23 +35,25 @@
   ;;  - a serialisable request
   ;;  - a return path that understands :update-python-session
   ;;  - a precise specification of the app+dependencies version for (retrieve-exact-app) (currently the app itself, but we can make this more efficient)
-  (let [{:keys [app-id app session-state environment call-stack stale-uplink? tracing-span vt_global scheduled-task-id bg-task-timeout step-in]} request
+  (let [{:keys [app-id app session-state environment call-stack stale-uplink? tracing-span vt_global scheduled-task-id bg-task-timeout bg-task-watch-key step-in paused]} request
         persistence-key (get-persistence-key environment app)
         n-responses (atom 0)
         current-session (atom session-state)
         python-session-state-at-send (atom (:pymods @session-state))
-        start-time (System/nanoTime)
+        start-time-nano (System/nanoTime)
+        start-time (System/currentTimeMillis)
         return-path {:respond! (fn [resp]
                                  (when (= 1 (swap! n-responses inc))
                                    (dispatcher/respond!
                                      return-path
                                      (merge resp
                                             (when (and (:anvil/enable-profiling @session-state) profiling-info)
-                                              {:profile (merge profiling-info
-                                                               {:start-time (/ start-time 1000000.0)
-                                                                :end-time   (/ (System/nanoTime) 1000000.0)}
-                                                               (when-let [p (:profile resp)]
-                                                                 {:children [p]}))})))))
+                                              (let [end-time-nano (System/nanoTime)]
+                                                {:profile (merge profiling-info
+                                                                 {:start-time start-time
+                                                                  :end-time (+ start-time (/ (- end-time-nano start-time-nano) 1e6))}
+                                                                 (when-let [p (:profile resp)]
+                                                                   {:children [p]}))}))))))
 
                      :update!  (fn [update]
                                  (log/trace "Passing update:" update)
@@ -97,13 +100,19 @@
                       (if live-object
                         {:liveObjectCall (assoc live-object :method func)}
                         {:command func})
+                      (when tracing-span
+                        {:span-ctx (tracing/span->map tracing-span)})
                       (when scheduled-task-id
                         {:scheduled-task-id scheduled-task-id})
                       (when bg-task-timeout
                         {:bg-task-timeout  bg-task-timeout})
+                      (when bg-task-watch-key
+                        {:bg-task-watch-key bg-task-watch-key})
                       (when step-in
-                        {:step-in true})))
-        ]
+                        {:step-in true})
+                      (when paused
+                        {:paused true})))]
+
     {:request request, :return-path return-path, :call-context call-context}))
 
 ;; If we need to reinflate a request, but not already inside a dispatch context, you'll need one of these.
@@ -123,7 +132,7 @@
 
 (defn reinflate-request [call-context {:keys [origin stack-frame-type] :as call-stack-info} deserialiser-config serialisable-request]
   (let [{:keys [call-stack environment]} (::request call-context)
-        {:keys [args kwargs command liveObjectCall vt_global scheduled-task-id step-in]} serialisable-request
+        {:keys [args kwargs command liveObjectCall vt_global scheduled-task-id bg-task-watch-key step-in paused span-ctx]} serialisable-request
         liveObjectCall (serialisation/loadLiveObject (serialisation/mk-Deserialiser deserialiser-config) liveObjectCall)]
     (-> (select-keys (::request call-context) [:app-id :app-info :app :environment :tracing-span])
         (assoc :call {:func        (or (:method liveObjectCall)
@@ -140,10 +149,12 @@
                :origin (keyword origin)
                :call-stack (cons {:type (keyword stack-frame-type)} call-stack)
                :thread-id (:thread-id (::request call-context)))
-        (merge (when scheduled-task-id
-                 {:scheduled-task-id scheduled-task-id}))
-        (merge (when step-in
-                 {:step-in true})))))
+        (cond->
+          scheduled-task-id (assoc :scheduled-task-id scheduled-task-id)
+          bg-task-watch-key (assoc :bg-task-watch-key bg-task-watch-key)
+          step-in (assoc :step-in true)
+          paused (assoc :paused true)
+          span-ctx (assoc :tracing-span (Span/fromContextOrNull (tracing/map->context span-ctx)))))))
 
 
 (defn dispatch-request! [call-context call-stack-info extra-request-params

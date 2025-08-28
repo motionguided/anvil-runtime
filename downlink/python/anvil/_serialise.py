@@ -22,6 +22,7 @@ class StreamingMedia(anvil.Media):
         self._incoming_content = []
         self._complete = False
         self._name = name
+        self._error = None
 
     def add_content(self, data, last_chunk=False):
         self._incoming_content.append(data)
@@ -30,6 +31,10 @@ class StreamingMedia(anvil.Media):
             self._incoming_content = []
             self._complete = True
 
+    def set_error(self, error):
+        self._error = error
+        self._complete = True
+
     def is_complete(self):
         return self._complete
 
@@ -37,6 +42,8 @@ class StreamingMedia(anvil.Media):
         return self._content_type
 
     def get_bytes(self):
+        if self._error:
+            raise _server._deserialise_exception(self._error)
         return self._content
 
     def get_url(self):
@@ -77,6 +84,13 @@ class IncomingReqResp:
         if json['lastChunk']:
             self.maybe_execute()
 
+    def process_media_error(self, json):
+        for media_id in json['mediaIds']:
+            media = self.media.get(media_id)
+            if media is not None:
+                media.set_error(json['cause'])
+        self.maybe_execute()
+
     def is_ready(self):
         for id in self.media:
             if not self.media[id].is_complete():
@@ -111,9 +125,13 @@ def process_blob(blob):
     _next_hdr = None
 
 
+def process_media_error(msg):
+    req = _incoming_requests.get(msg['requestId'])
+    if req is not None:
+        req.process_media_error(msg)
+
 # Machinery to suspend execution of all reqresps until an external event (app loading)
 holding_reqresps = False
-
 
 def release_reqresps():
     global holding_reqresps

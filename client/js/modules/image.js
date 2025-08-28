@@ -33,14 +33,15 @@ description: |
   To rotate an image clockwise by some number of degrees, use the `rotate` method.
 */
 
-const { anvilMod } = require("@runtime/runner/py-util");
+import { anvilMod } from "@runtime/runner/py-util";
+import PyDefUtils from "PyDefUtils";
 
 
 // TODO: Make use of media._anvilCachedImage, as used in Canvas drawImage
-module.exports = function() {
+const image = () => {
 
     var pyMod = {"__name__": new Sk.builtin.str("image")};
-	var PyDefUtils = require("PyDefUtils");
+
 
     function dataURItoBlob(dataURI) {
         // convert base64 to raw binary data held in a string
@@ -266,7 +267,9 @@ module.exports = function() {
     })
 
     return pyMod;
-}
+};
+
+export default image;
 
 /*
  * TO TEST:

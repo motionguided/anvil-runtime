@@ -1,41 +1,35 @@
 // An add-in to the `anvil` module that allows us to hook and control component construction
 
-import * as PyDefUtils from "../PyDefUtils";
 import {
-    pyValueError,
+    Args,
     Kws,
-    pyObject,
+    Suspension,
+    arrayFromIterable,
     chainOrSuspend,
     checkString,
-    pyStr,
-    pyCallOrSuspend,
-    Args,
     copyKeywordsToNamedArgs,
-    pyTuple,
-    pyDict,
-    pyNone,
-    pyFalse,
-    pyCall,
-    keywordArrayFromPyDict,
-    pyIterable,
-    pyNoneType,
     isTrue,
-    toJs,
-    pyRuntimeError,
+    keywordArrayFromPyDict,
     objectRepr,
-    arrayFromIterable,
-    toPy,
-    pyCallable, pyImportError, pyType,
+    pyCall,
+    pyCallOrSuspend,
+    pyDict,
+    pyFalse,
+    pyImportError,
+    pyIterable,
+    pyNone,
+    pyNoneType,
+    pyObject,
+    pyRuntimeError,
+    pyStr,
+    pyTuple,
+    pyValueError,
+    toJs,
 } from "../@Sk";
+import { Component, ComponentConstructor, getDefaultDepIdForComponent } from "../components/Component";
+import { isPyInstantiatorFunction, PyInstantiatorFunction } from "./component-property-utils-api";
 import { data } from "./data";
-import {
-    getDefaultDepIdForComponent,
-    setDefaultDepIdForNextComponent,
-} from "../components/Component";
-import type { Component, ComponentConstructor } from "../components/Component";
-import {PyModMap, anvilMod, funcFastCall} from "./py-util";
-import {YamlCreationStack} from "@runtime/runner/component-creation";
-import { PyInstantiatorFunction } from "./component-property-utils-api";
+import { PyModMap, anvilMod, funcFastCall } from "./py-util";
 
 // There are two times when we might want to turn the name of a form into a constructor, at which point
 // we need to disambiguate which app/dependency we should look in when we get a bare string like "Form1".
@@ -68,7 +62,7 @@ export const getDefaultDepIdForInstantiation = (context: InstantiationContext) =
     context.fromYaml ? context.defaultDepId : getDefaultDepIdForComponent(context.requestingComponent);
 
 const COMPONENT_MATCHER = /^(?:([^:]+):)?([^:]*)$/;
-const ComponentMatcher = (nameSpec: string) => nameSpec.match(COMPONENT_MATCHER) as [any, string|null, string] | null;
+const ComponentMatcher = (nameSpec: string) => nameSpec.match(COMPONENT_MATCHER) as [any, string | null, string] | null;
 
 export interface ResolvedForm {
     formName: string;
@@ -77,8 +71,8 @@ export interface ResolvedForm {
     logicalDepId: string | null;
 }
 
-export const resolveFormSpec = (name: string, defaultDepId: string |null): ResolvedForm => {
-    const [, logicalDepId=null, formName] = ComponentMatcher(name) ?? [];
+export const resolveFormSpec = (name: string, defaultDepId: string | null): ResolvedForm => {
+    const [, logicalDepId = null, formName] = ComponentMatcher(name) ?? [];
     if (!formName) {
         throw new Error(`Invalid YAML spec for form: ${name}`);
     }
@@ -89,27 +83,26 @@ export const resolveFormSpec = (name: string, defaultDepId: string |null): Resol
     const appPackage = logicalDepId
         ? data.dependencyPackages[depId!]
         : defaultDepId
-            ? data.dependencyPackages[defaultDepId]
-            : data.appPackage;
+        ? data.dependencyPackages[defaultDepId]
+        : data.appPackage;
     // console.log("Resolving", appPackage, "for dep", depId, "/", defaultDepId, "from", data.dependencyPackages, "with", data.appPackage);
     if (!appPackage) {
         throw new pyValueError("Dependency not found for: " + name);
     }
-    return {qualifiedClassName: `${appPackage}.${formName}`, depId, formName, logicalDepId};
+    return { qualifiedClassName: `${appPackage}.${formName}`, depId, formName, logicalDepId };
 };
 
-export const getFormClassObject = ({qualifiedClassName}: ResolvedForm) => {
+export const getFormClassObject = ({ qualifiedClassName }: ResolvedForm) => {
     return chainOrSuspend(Sk.importModule(qualifiedClassName, false, true), () => {
         const dots = qualifiedClassName.split(".").slice(1);
         const className = dots[dots.length - 1];
 
         const pyFormMod = Sk.sysmodules.quick$lookup(new pyStr(qualifiedClassName));
         if (pyFormMod) {
-            return pyFormMod.tp$getattr(new pyStr(className)) as ComponentConstructor;
+            return Sk.abstr.gattr(pyFormMod, new pyStr(className)) as ComponentConstructor;
         }
     });
 };
-
 
 export const WELL_KNOWN_PATHS = {
     LAYOUT: "__anvil layout *HV57",
@@ -125,9 +118,12 @@ export const setInstantiationHooks = (hooks: InstantiationHooks) => {
     ({ getAnvilComponentInstantiator, getAnvilComponentClass, getNamedFormInstantiator } = hooks);
 };
 
-export const getDefaultAnvilComponentInstantiator = (context: InstantiationContext, componentType: string) => {
+export const getDefaultAnvilComponentInstantiator = (
+    context: InstantiationContext,
+    componentType: string
+): ((kws?: Kws, pathStep?: string | number) => Suspension | Component) => {
     const pyComponentConstructor = anvilMod[componentType] as ComponentConstructor;
-    return (kwargs?: Kws, pathStep?: string | number) => pyCallOrSuspend(pyComponentConstructor, [], kwargs);
+    return (kws, pathStep) => pyCallOrSuspend(pyComponentConstructor, [], kws);
 };
 
 export interface FormInstantiationFlags {
@@ -138,36 +134,49 @@ export interface FormInstantiationFlags {
 // Form instantiators carry the identity of the underlying form
 
 export interface InstantiatorFunction {
-    (kws?: Kws, pathStep?: number | string) : Component;
-    anvil$instantiatorForForm: ResolvedForm;
+    (kws?: Kws, pathStep?: number | string): Suspension | Component;
+    anvil$instantiatorForForm: ResolvedForm | null;
 }
 
-export const getDefaultNamedFormInstantiator = (formSpec: ResolvedForm, requestingComponent?: Component, flags?: FormInstantiationFlags) => {
+export const getDefaultNamedFormInstantiator = (
+    formSpec: ResolvedForm,
+    requestingComponent?: Component,
+    flags?: FormInstantiationFlags
+): Suspension | InstantiatorFunction => {
     return chainOrSuspend(getFormClassObject(formSpec), (constructor) => {
         if (constructor === undefined) {
             throw new pyImportError("Failed to import form " + formSpec.formName);
         }
-        return (kwargs?: Kws, pathStep?: string | number) => pyCallOrSuspend(constructor, [], kwargs);
+        const ifn = (kwargs?: Kws, pathStep?: string | number) => pyCallOrSuspend(constructor, [], kwargs);
+        ifn.anvil$instantiatorForForm = formSpec;
+        return ifn;
     });
 };
 
-export let getAnvilComponentClass = (anvilModule: PyModMap, componentType: string) => anvilModule[componentType] as ComponentConstructor | undefined;
+export let getAnvilComponentClass = (anvilModule: PyModMap, componentType: string) =>
+    anvilModule[componentType] as ComponentConstructor | undefined;
 
 export let getAnvilComponentInstantiator = getDefaultAnvilComponentInstantiator;
 
 export let getNamedFormInstantiator = getDefaultNamedFormInstantiator;
 
-export const getFormInstantiator = (context: InstantiationContext, formSpec: pyStr | ComponentConstructor | PyInstantiatorFunction, flags?: FormInstantiationFlags) => {
+export const getFormInstantiator = (
+    context: InstantiationContext,
+    formSpec: pyStr | ComponentConstructor | PyInstantiatorFunction,
+    flags?: FormInstantiationFlags
+): Suspension | InstantiatorFunction => {
     if (checkString(formSpec)) {
         const resolvedForm = resolveFormSpec(formSpec.toString(), getDefaultDepIdForInstantiation(context));
-        const ifn = getNamedFormInstantiator(resolvedForm, context.requestingComponent, flags) as InstantiatorFunction;
-        ifn.anvil$instantiatorForForm = resolvedForm;
-        return ifn;
+        return getNamedFormInstantiator(resolvedForm, context.requestingComponent, flags);
+    } else if (isPyInstantiatorFunction(formSpec)) {
+        return formSpec.anvil$underlyingInstantiator;
     } else {
         // formSpec is a Python callable; wrap it
-        return (formSpec as PyInstantiatorFunction).anvil$underlyingInstantiator ?? ((kws?: Kws) => pyCallOrSuspend(formSpec, [], kws)) ;
+        const ifn = (kws?: Kws) => pyCallOrSuspend<Component>(formSpec, [], kws);
+        ifn.anvil$instantiatorForForm = null as any;
+        return ifn;
     }
-}
+};
 
 // Used from Python code
 export const pyInstantiateComponent = funcFastCall((args_: Args, kws_?: Kws) => {
@@ -200,7 +209,9 @@ export const pyInstantiateComponent = funcFastCall((args_: Args, kws_?: Kws) => 
 
     return chainOrSuspend(
         checkString(component)
-            ? getFormClassObject(resolveFormSpec(component.toString(), getDefaultDepIdForComponent(requestingComponent)))
+            ? getFormClassObject(
+                  resolveFormSpec(component.toString(), getDefaultDepIdForComponent(requestingComponent))
+              )
             : component,
         (constructor) => {
             if (constructor === undefined) {

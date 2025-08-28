@@ -2,8 +2,8 @@
 // npm install -g lessc
 // lessc _modal.scss _modal.css
 
-@import "./variables.scss";
-@import "./utils.scss";
+@use "variables.scss";
+@use "utils.scss";
 
 //
 // Variables
@@ -48,11 +48,11 @@
 // We don't use the `.opacity()` mixin here since it causes a bug with text
 // fields in IE7-8. Source: https://github.com/twbs/bootstrap/pull/3552.
 
-.#{$prefix}fade {
+.#{variables.$prefix}fade {
     opacity: 0;
     @include transition(opacity 0.15s linear);
 
-    &.#{$prefix}in {
+    &.#{variables.$prefix}in {
         opacity: 1;
     }
 }
@@ -60,45 +60,45 @@
 $zindex-modal-background: 1040;
 $zindex-modal: 1050;
 
-$line-height-base: 1.428571429; // 20/14
+variables.$line-height-base: 1.428571429; // 20/14
 
-$border-radius-base: 4px;
-$border-radius-large: 6px;
-$border-radius-small: 3px;
+variables.$border-radius-base: 4px;
+variables.$border-radius-large: 6px;
+variables.$border-radius-small: 3px;
 
 // Extra small screen / phone
 //** Deprecated `$screen-xs` as of v3.0.1
-$screen-xs: 480px;
+variables.$screen-xs: 480px;
 //** Deprecated `$screen-xs-min` as of v3.2.0
-$screen-xs-min: $screen-xs;
+variables.$screen-xs-min: variables.$screen-xs;
 //** Deprecated `$screen-phone` as of v3.0.1
-$screen-phone: $screen-xs-min;
+variables.$screen-phone: variables.$screen-xs-min;
 
 // Small screen / tablet
 //** Deprecated `$screen-sm` as of v3.0.1
-$screen-sm: 768px;
-$screen-sm-min: $screen-sm;
+variables.$screen-sm: 768px;
+variables.$screen-sm-min: variables.$screen-sm;
 //** Deprecated `$screen-tablet` as of v3.0.1
-$screen-tablet: $screen-sm-min;
+variables.$screen-tablet: variables.$screen-sm-min;
 
 // Medium screen / desktop
 //** Deprecated `$screen-md` as of v3.0.1
-$screen-md: 992px;
-$screen-md-min: $screen-md;
+variables.$screen-md: 992px;
+variables.$screen-md-min: variables.$screen-md;
 //** Deprecated `$screen-desktop` as of v3.0.1
-$screen-desktop: $screen-md-min;
+variables.$screen-desktop: variables.$screen-md-min;
 
 // Large screen / wide desktop
 //** Deprecated `$screen-lg` as of v3.0.1
-$screen-lg: 1200px;
-$screen-lg-min: $screen-lg;
+variables.$screen-lg: 1200px;
+variables.$screen-lg-min: variables.$screen-lg;
 //** Deprecated `$screen-lg-desktop` as of v3.0.1
-$screen-lg-desktop: $screen-lg-min;
+variables.$screen-lg-desktop: variables.$screen-lg-min;
 
 // So media queries don't overlap when required, provide a maximum
-$screen-xs-max: ($screen-sm-min - 1);
-$screen-sm-max: ($screen-md-min - 1);
-$screen-md-max: ($screen-lg-min - 1);
+variables.$screen-xs-max: (variables.$screen-sm-min - 1);
+variables.$screen-sm-max: (variables.$screen-md-min - 1);
+variables.$screen-md-max: (variables.$screen-lg-min - 1);
 
 //== Modals
 //
@@ -110,7 +110,7 @@ $modal-inner-padding: 15px;
 //** Padding applied to the modal title
 $modal-title-padding: 15px;
 //** Modal title line-height
-$modal-title-line-height: $line-height-base;
+$modal-title-line-height: variables.$line-height-base;
 
 //** Background color of modal content area
 $modal-content-bg: #fff;
@@ -142,12 +142,12 @@ $modal-sm: 300px;
 // .#{$prefix}modal-content   - actual modal w/ bg and corners and shit
 
 // Kill the scroll on the body
-.#{$prefix}modal-open {
+.#{variables.$prefix}modal-open {
     overflow: hidden;
 }
 
 // Container that the modal scrolls within
-.#{$prefix}modal {
+.#{variables.$prefix}modal {
     position: fixed;
     top: 0;
     right: 0;
@@ -163,43 +163,43 @@ $modal-sm: 300px;
     outline: 0;
 
     // When fading in the modal, animate it to slide down
-    &.#{$prefix}fade .#{$prefix}modal-dialog {
+    &.#{variables.$prefix}fade .#{variables.$prefix}modal-dialog {
         @include translate(0, -25%);
         @include transition-transform(0.3s ease-out);
     }
 
-    &.#{$prefix}in .#{$prefix}modal-dialog {
+    &.#{variables.$prefix}in .#{variables.$prefix}modal-dialog {
         @include translate(0, 0);
     }
 }
 
-.#{$prefix}modal-open .#{$prefix}modal {
+.#{variables.$prefix}modal-open .#{variables.$prefix}modal {
     overflow-x: hidden;
     overflow-y: auto;
 }
 
 // Shell div to position the modal with bottom padding
-.#{$prefix}modal-dialog {
+.#{variables.$prefix}modal-dialog {
     position: relative;
     width: auto;
     margin: 10px;
 }
 
 // Actual modal
-.#{$prefix}modal-content {
+.#{variables.$prefix}modal-content {
     position: relative;
     background-color: $modal-content-bg;
     background-clip: padding-box;
     border: 1px solid $modal-content-fallback-border-color; //old browsers fallback (ie8 etc)
     border: 1px solid $modal-content-border-color;
-    border-radius: $border-radius-large;
+    border-radius: variables.$border-radius-large;
     @include box-shadow(0 3px 9px rgba(0, 0, 0, 0.5));
     // Remove focus outline from opened modal
     outline: 0;
 }
 
 // Modal background
-.#{$prefix}modal-backdrop {
+.#{variables.$prefix}modal-backdrop {
     position: fixed;
     top: 0;
     right: 0;
@@ -209,47 +209,47 @@ $modal-sm: 300px;
     background-color: $modal-backdrop-bg;
 
     // Fade for backdrop
-    &.#{$prefix}fade {
+    &.#{variables.$prefix}fade {
         @include opacity(0);
     }
 
-    &.#{$prefix}in {
+    &.#{variables.$prefix}in {
         @include opacity($modal-backdrop-opacity);
     }
 }
 
 // Modal header
 // Top section of the modal w/ title and dismiss
-.#{$prefix}modal-header {
+.#{variables.$prefix}modal-header {
     padding: $modal-title-padding;
     border-bottom: 1px solid $modal-header-border-color;
-    @include clearfix();
+    @include utils.clearfix();
 }
 
 // Close icon
-.#{$prefix}modal-header .#{$prefix}close {
+.#{variables.$prefix}modal-header .#{variables.$prefix}close {
     margin-top: -2px;
 }
 
 // Title text within header
-.#{$prefix}modal-title {
+.#{variables.$prefix}modal-title {
     margin: 0;
     line-height: $modal-title-line-height;
 }
 
 // Modal body
 // Where all modal content resides (sibling of .#{$prefix}modal-header and .modal-footer)
-.#{$prefix}modal-body {
+.#{variables.$prefix}modal-body {
     position: relative;
     padding: $modal-inner-padding;
 }
 
 // Footer (for actions)
-.#{$prefix}modal-footer {
+.#{variables.$prefix}modal-footer {
     padding: $modal-inner-padding;
     text-align: right; // right align buttons
     border-top: 1px solid $modal-footer-border-color;
-    @include clearfix();
+    @include utils.clearfix();
 
     // Properly space out buttons
     .btn + .btn {
@@ -269,7 +269,7 @@ $modal-sm: 300px;
 }
 
 // Measure scrollbar width for padding body during modal show/hide
-.#{$prefix}modal-scrollbar-measure {
+.#{variables.$prefix}modal-scrollbar-measure {
     position: absolute;
     top: -9999px;
     width: 50px;
@@ -278,25 +278,25 @@ $modal-sm: 300px;
 }
 
 // Scale up the modal
-@media (min-width: $screen-sm-min) {
+@media (min-width: variables.$screen-sm-min) {
     // Automatically set modal's width for larger viewports
-    .#{$prefix}modal-dialog {
+    .#{variables.$prefix}modal-dialog {
         width: $modal-md;
         margin: 30px auto;
     }
 
-    .#{$prefix}modal-content {
+    .#{variables.$prefix}modal-content {
         @include box-shadow(0 5px 15px rgba(0, 0, 0, 0.5));
     }
 
     // Modal sizes
-    .#{$prefix}modal-sm {
+    .#{variables.$prefix}modal-sm {
         width: $modal-sm;
     }
 }
 
-@media (min-width: $screen-md-min) {
-    .#{$prefix}modal-lg {
+@media (min-width: variables.$screen-md-min) {
+    .#{variables.$prefix}modal-lg {
         width: $modal-lg;
     }
 }
@@ -304,7 +304,7 @@ $modal-sm: 300px;
 //== Close
 //
 //##
-$font-size-base: 14px;
+variables.$font-size-base: 14px;
 $close-font-weight: bold;
 $close-color: #000;
 $close-text-shadow: 0 1px 0 #fff;
@@ -313,9 +313,9 @@ $close-text-shadow: 0 1px 0 #fff;
 // Close icons
 // --------------------------------------------------
 
-.#{$prefix}close {
+.#{variables.$prefix}close {
     float: right;
-    font-size: ($font-size-base * 1.5);
+    font-size: (variables.$font-size-base * 1.5);
     font-weight: $close-font-weight;
     line-height: 1;
     color: $close-color;

@@ -5,12 +5,12 @@ import { warn } from "@runtime/runner/warnings";
 import { pyCall, pyDict, pyMappingProxy, pyStr, remapToJsOrWrap, toPy } from "@Sk";
 import { pyPropertyFromGetSet, s_add_component, s_clear } from "../runner/py-util";
 import { Slot } from "../runner/python-objects";
-import { validateChild } from "./Container";
+import { indexInRange, validateChild } from "./Container";
 import { isInvisibleComponent } from "./helpers";
 
-var PyDefUtils = require("PyDefUtils");
+import PyDefUtils from "PyDefUtils";
 
-module.exports = (pyModule) => {
+const HtmlPanel = (pyModule) => {
 
 
 
@@ -344,11 +344,13 @@ module.exports = (pyModule) => {
             });
         };
 
+        index = indexInRange(index, self);
+
         // Unless index is undefined, we're inserting before a particular component in this slot.
         // We want to identify this component, find its container component, and insert before it.
 
         let insertingBeforeComponentInSlot;
-        if (index !== undefined) {
+        if (index != null) {
             // Find the next component after `index` that's in this slot
             for (let i=index; i < self._anvil.components.length; i++) {
                 const sn = self._anvil.components[i].layoutProperties?.slot ?? "default";
@@ -539,6 +541,8 @@ module.exports = (pyModule) => {
     }
 
 };
+
+export default HtmlPanel;
 
 /*!defClass(anvil,HtmlTemplate,Container)!*/
 

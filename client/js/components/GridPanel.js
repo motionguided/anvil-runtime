@@ -1,6 +1,6 @@
 "use strict";
 
-var PyDefUtils = require("PyDefUtils");
+import PyDefUtils from "PyDefUtils";
 import { validateChild } from "./Container";
 import { getCssPrefix } from "@runtime/runner/legacy-features";
 import { isInvisibleComponent } from "./helpers";
@@ -39,16 +39,26 @@ description: |
 
 */
 
-module.exports = (pyModule) => {
-
+const GridPanel = (pyModule) => {
     pyModule["GridPanel"] = PyDefUtils.mkComponentCls(pyModule, "GridPanel", {
         base: pyModule["ClassicContainer"],
 
-        properties: PyDefUtils.assembleGroupProperties(/*!componentProps(GridPanel)!2*/ ["layout", "layout_spacing", "containers", "appearance", "user data", "tooltip"]),
+        properties: PyDefUtils.assembleGroupProperties(
+            /*!componentProps(GridPanel)!2*/ [
+                "layout",
+                "layout_spacing",
+                "containers",
+                "appearance",
+                "user data",
+                "tooltip",
+            ]
+        ),
 
         events: PyDefUtils.assembleGroupEvents("grid panel", /*!componentEvents(GridPanel)!1*/ ["universal"]),
 
-        element: (props) => <PyDefUtils.OuterElement className={`${getCssPrefix()}grid-panel anvil-container` }{...props} />,
+        element: (props) => (
+            <PyDefUtils.OuterElement className={`${getCssPrefix()}grid-panel anvil-container`} {...props} />
+        ),
 
         locals($loc) {
             $loc["__new__"] = PyDefUtils.mkNew(pyModule["ClassicContainer"], (self) => {
@@ -57,13 +67,13 @@ module.exports = (pyModule) => {
                     self._anvil.getContainerClassList = getContainerClassList;
                 }
                 // component = {pyComponent: (pyObj), row: (id), lastCol: {xs: 0-12, sm: 0-12, ...}
-                self._anvil.rows = {}; 
+                self._anvil.rows = {};
                 // row = {element: (jq), lastCol: {xs: 0-12, sm: 0-12, ...}}
             });
 
             const ContainerElement = ({ classList }) => <div className={classList} />;
 
-            /*!defMethod(_,component,[row=],[col_xs=],[width_xs=])!2*/ "Add a component to this GridPanel";
+            /*!defMethod(_,component,[row=],[col_xs=],[width_xs=])!2*/ ("Add a component to this GridPanel");
             $loc["add_component"] = PyDefUtils.funcWithKwargs(function add_component(kwargs, self, pyComponent) {
                 validateChild(pyComponent);
 
@@ -151,7 +161,6 @@ module.exports = (pyModule) => {
 
         return classList;
     }
-
 };
 
 /*!defClass(anvil,GridPanel,Container)!*/
@@ -165,3 +174,5 @@ module.exports = (pyModule) => {
  *  - Methods: add_component, clear
  *
  */
+
+export default GridPanel;

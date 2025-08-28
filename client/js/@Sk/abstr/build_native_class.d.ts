@@ -33,7 +33,7 @@ export type GetSetDef<I> = {
     $name?: string;
 };
 
-type SlotDefs<I> = numberSlots<I> & seqMapSlots & tpSlots<I>;
+type SlotDefs<I> = numberSlots<I> & seqMapSlots<I> & tpSlots<I>;
 
 type ConstructorFn<I extends pyObject, T extends pyNewableType> = (
     this: I,

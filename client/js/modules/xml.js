@@ -1,6 +1,6 @@
-"use strict";
 
-module.exports = function() {
+
+const xml = () => {
 
     var pyMod = {"__name__": new Sk.builtin.str("anvil.xml")};
 
@@ -61,7 +61,9 @@ module.exports = function() {
     }, 'XMLDocument', []);
 
     return pyMod;
-}
+};
+
+export default xml;
 
 /*
  * TO TEST:

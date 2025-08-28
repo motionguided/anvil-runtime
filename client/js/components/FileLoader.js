@@ -1,8 +1,8 @@
 "use strict";
 
-const { getCssPrefix } = require("@runtime/runner/legacy-features");
-var PyDefUtils = require("PyDefUtils");
-const { setElementMargin, setElementPadding, getUnsetSpacing } = require("@runtime/runner/components-in-js/public-api/property-utils");
+import { getCssPrefix } from "@runtime/runner/legacy-features";
+import PyDefUtils from "PyDefUtils";
+import { setElementMargin, setElementPadding, getUnsetSpacing } from "@runtime/runner/components-in-js/public-api/property-utils";
 
 /*#
 id: fileloader
@@ -46,7 +46,7 @@ description: |
   To reset the file-loader and make it ready to receive more files, call its `clear()` method.
 */
 
-module.exports = (pyModule) => {
+const FileLoader = (pyModule) => {
     const { isTrue } = Sk.misceval;
 
     pyModule["FileLoader"] = PyDefUtils.mkComponentCls(pyModule, "FileLoader", {
@@ -315,3 +315,6 @@ module.exports = (pyModule) => {
  *  - New events: change
  *
  */
+
+export default FileLoader;
+

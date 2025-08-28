@@ -8,6 +8,7 @@
             [anvil.runtime.browser-ws :as browser-ws]
             [anvil.runtime.browser-http :as browser-http]
             [anvil.runtime.secrets :as secrets]
+            [clojure.string :as str]
             [digest]
             [ring.util.response :as resp]
             [ring.util.mime-type :as mime-type]
@@ -46,11 +47,14 @@
             [anvil.runtime.debugger :as debugger])
   (:import (java.io ByteArrayInputStream)
            (anvil.dispatcher.types Media MediaDescriptor InputStreamMedia ChunkedStream)
+           (java.nio.charset Charset)
+           (java.util ArrayList Collection)
            (org.apache.commons.codec.binary Base64)
            (java.net URLEncoder URLDecoder)
            (com.onelogin.saml2.authn AuthnRequest SamlResponse)
            (com.onelogin.saml2.settings SettingsBuilder Saml2Settings)
-           (com.onelogin.saml2.util Constants)))
+           (com.onelogin.saml2.util Constants)
+           (org.apache.http.client.utils URLEncodedUtils)))
 
 (clj-logging-config.log4j/set-logger! :level :info)
 (clj-logging-config.log4j/set-logger! "com.onelogin.saml2" :level :debug)
@@ -237,7 +241,7 @@
           (log/error (:throwable &throw-context) "App dependency error when connecting websocket")))))
 
   (GET "/_/service-worker" req
-    (-> (slurp (runtime-client-resource req "/dist/sw.bundle.js"))
+    (-> (slurp (runtime-client-resource req "/dist/static/js/sw.bundle.js"))
         (resp/response)
         (resp/header "Service-Worker-Allowed" (hiccup-util/escape-html (:app-origin req)))
         (resp/content-type "application/javascript")))
@@ -403,7 +407,14 @@
             settings (saml/get-settings server-config (:app-info request))
 
             authn-request (AuthnRequest. settings (boolean (:force_authentication server-config)) false true)
-            sso-url (.getIdpSingleSignOnServiceUrl settings)
+            sso-url (str (.getIdpSingleSignOnServiceUrl settings))
+
+            safe-sso-url-params (->> (URLEncodedUtils/parse sso-url (Charset/forName "UTF-8"))
+                                     (filter #(not (contains? #{"SAMLRequest" "RelayState" "SigAlg"} (.getName %)))))
+
+            sso-url (str (first (str/split sso-url #"\?"))
+                         (when (not-empty safe-sso-url-params)
+                           (str "?" (URLEncodedUtils/format (ArrayList. ^Collection safe-sso-url-params) "UTF-8"))))
 
             saml-request (.getEncodedAuthnRequest authn-request)
             csrf-token (random/hex 60)
@@ -417,7 +428,8 @@
             signature (saml/sign-request query-string settings)
 
             redirect-target (str sso-url
-                                 "?" query-string
+                                 (if (not-empty safe-sso-url-params) "&" "?")
+                                 query-string
                                  "&Signature=" (util/real-actual-genuine-url-encoder signature))]
         (swap! (:app-session request) assoc ::saml-csrf-token csrf-token)
         (sessions/notify-session-update! (:app-session request))
@@ -456,7 +468,7 @@
                              {"{{app-name}}"           (:name app-info)
                               "{{social-description}}" (serve-app/render-app-description (get-in app-map [:metadata :description]))
                               "{{canonical-url}}"      (hiccup-util/escape-html app-origin)
-                              "{{icon}}"               (serve-app/image-from-metadata app-origin (:metadata app-map) :logo_img "/icon-512x512.png")
+                              "{{icon}}"               (serve-app/image-from-metadata-asset-or-url app-origin (get-in app-map [:metadata :logo_img]) "/icon-512x512.png")
 
                               "{{theme-color}}"        (:primary-color style)
                               "{{background-color}}"   (if (and (:primary-color style)

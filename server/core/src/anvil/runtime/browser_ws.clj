@@ -95,9 +95,9 @@
                   (on-client-disconnect connection)
                   (metrics/set! :api/runtime-connected-clients-total (swap! connected-client-count dec))
                   (sessions/unregister-session-listener! app-session session-listener-registration)
-                  (log/debug "Client websocket closed: " (:id @app-session) (pr-str why))
+                  (log/debug "Client websocket closed: " (:id @app-session) (pr-str why))))
                   ;; TODO: A websocket closing constitutes 'activity' on this session, so reset its expiry countdown.
-                  ))
+
 
       (on-receive channel
                   (fn [json-or-binary]
@@ -124,7 +124,8 @@
                                                       :session-state app-session
                                                       :use-quota?    true
                                                       :call-stack    (list {:type :browser})
-                                                      :step-in       (:stepIn data)}
+                                                      :step-in       (:stepIn data)
+                                                      :paused        (:paused data)}
                                     func (or (:command data) (:method (:liveObjectCall data)))
                                     request-id (:id data)
                                     responder (serial-responder request-id)
@@ -212,4 +213,4 @@
                         (log/error e "Error in client websocket handling")
                         (close channel)))))
 
-      (reset! on-open (fn [] )))))
+      (reset! on-open (fn [])))))

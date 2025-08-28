@@ -1,4 +1,4 @@
-/**
+/*#
 id: google_auth
 docs_url: /docs/integrations/google/authenticating-users
 title: Authenticating users

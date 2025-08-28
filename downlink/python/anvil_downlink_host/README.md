@@ -11,7 +11,7 @@ The easiest way to update the policy is by running the minijail0 command inside 
 For example:
 
 ```bash
-docker run docker run --privileged -v ~/input.pdf:/input.pdf -it anvil.works:4455/public/anvil-pdf-renderer bash
+docker run docker run --privileged -v ~/input.pdf:/input.pdf -it anvil.works/public/anvil-pdf-renderer bash
 
 # Inside the container
 

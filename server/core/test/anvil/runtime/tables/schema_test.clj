@@ -96,7 +96,7 @@
 
     ;; First we get table renames... [These could actually happen in reverse. We may need to make this test cleverer.]
     (is (= (:type rename-companies-table) :UPDATE_TABLE))
-    (is (= (:type rename-roles-table :UPDATE_TABLE)))
+    (is (= (:type rename-roles-table) :UPDATE_TABLE))
     (is (= (:table rename-roles-table) "roles"))
     (is (= (:new_python_name rename-roles-table) "permissions"))
     ;; ... which include updates to renamed tables

@@ -1,12 +1,18 @@
 (ns anvil.core.tracing
-  (:require [clojure.tools.logging :as log]
+  (:require [clojure.data.json :as json]
+            [clojure.tools.logging :as log]
             [anvil.util :as util]
-            [anvil.runtime.app-log :as app-log])
-  (:import (io.opentelemetry.api.trace Span StatusCode)
+            [anvil.runtime.app-log :as app-log]
+            [clojure.pprint :refer [pprint]])
+  (:import (io.opentelemetry.api.common Attributes)
+           (io.opentelemetry.api.trace ArrayBasedTraceStateBuilder PropagatedSpan Span SpanContext SpanKind StatusCode TraceFlags TraceState TraceStateBuilder)
            (io.opentelemetry.context Context)
-           (io.opentelemetry.api GlobalOpenTelemetry)
+           (io.opentelemetry.api GlobalOpenTelemetry OpenTelemetry)
            (io.opentelemetry.context.propagation TextMapSetter TextMapGetter)
-           (io.opentelemetry.api.trace.propagation W3CTraceContextPropagator)))
+           (io.opentelemetry.api.trace.propagation W3CTraceContextPropagator)
+           (io.opentelemetry.sdk.trace RecordEventsReadableSpan)
+           (java.time Instant)
+           (java.time.format DateTimeFormatter)))
 
 (clj-logging-config.log4j/set-logger! :level :info)
 
@@ -38,37 +44,47 @@
 (defn map->context [map]
   (let [getter (reify TextMapGetter
                  (keys [_ carrier] (keys carrier))
-                 (get [_ carrier key] (get carrier (keyword key))))
+                 (get [_ carrier key]
+                   ;; Sometimes the map has been round-tripped through JSON and keys are keywords.
+                   ;; Other times, they remain as strings. Support both!
+                   (let [str-val (get carrier key ::not-found)]
+                     (if (not= str-val ::not-found)
+                       str-val
+                       (get carrier (keyword key))))))
         propagator (W3CTraceContextPropagator/getInstance)]
     (.extract propagator (Context/root) map getter)))
+
+(defn mk-attrs [attrs]
+  (let [b (Attributes/builder)]
+    (doseq [[k v] attrs]
+      (.put b (name k) v))
+    (.build b)))
 
 (defonce on-start-span (fn [tracing-span] nil))
 
 (defn start-span
   "If you use this, you are responsible for closing the returned span!"
   ([span-name attrs] (start-span span-name attrs nil))
-  ([span-name attrs parent]
-   (let [open-telemetry (GlobalOpenTelemetry/get)
-         tracer (.getTracer open-telemetry "anvil.core.tracing")
-         span-builder (-> tracer
-                          (.spanBuilder span-name))
-         span-builder (if parent
-                        (-> span-builder
-                            (.setParent (cond
-                                          (map? parent)
-                                          (map->context parent)
+  ([span-name attrs parent] (start-span span-name attrs parent (GlobalOpenTelemetry/get) nil))
+  ([span-name attrs parent ^OpenTelemetry open-telemetry start-time]
+   (let [tracer (.getTracer open-telemetry "anvil.core.tracing")
+         span ^Span (-> tracer
+                        (.spanBuilder span-name)
+                        (cond->
+                          start-time (.setStartTimestamp start-time)
+                          parent (.setParent (cond
+                                               (map? parent)
+                                               (map->context parent)
 
-                                          (instance? Context parent)
-                                          parent
+                                               (instance? Context parent)
+                                               parent
 
-                                          (instance? Span parent)
-                                          (-> (Context/root)
-                                              (.with parent))
+                                               (instance? Span parent)
+                                               (-> (Context/root)
+                                                   (.with parent))
 
-                                          :else
-                                          (log/error (str "Invalid parent passed to start-span: " (pr-str parent))))))
-                        span-builder)
-         span ^Span (-> span-builder
+                                               :else
+                                               (log/error (str "Invalid parent passed to start-span: " (pr-str parent))))))
                         (.startSpan))]
      (log/trace (str "Started span '" span-name "' (" (.getSpanId (.getSpanContext span)) ") with parent " (pr-str parent)))
      (merge-span-attrs span attrs)
@@ -106,13 +122,12 @@
        ~@body)))
 
 (defmacro with-span [[name & [attrs parent]] & body]
-  `(try
-    (with-start-span [~name ~attrs ~parent]
-      (let [span# (Span/current)]
-        (try
-          ~@body
-          (finally
-            (end-span! span#)))))))
+  `(with-start-span [~name ~attrs ~parent]
+     (let [span# (Span/current)]
+       (try
+         ~@body
+         (finally
+           (end-span! span#))))))
 
 (defmacro with-recorded-span [[name & args] & body]
   `(with-span [~name ~@args]
@@ -128,16 +143,42 @@
   ([span event-name]
    (.addEvent span event-name)))
 
-(def set-tracing-hooks! (util/hook-setter [on-start-span]))
+(defonce get-sdk (fn [service] nil))
 
-;(with-span ["Foo"]
-;  (println "Hi from foo")
-;  (with-span ["Bar" {:key "value"}]
-;    (println "Bar")
-;    (set-span-status :ERROR))
-;  (with-span ["Baz" {:t 42}]
-;    (Thread/sleep 20)
-;    (.addEvent (Span/current) "Wake!")
-;    (Thread/sleep 20)
-;    (set-span-status :OK)
-;    (println "Wake!")))
+(defonce mk-span (fn [] (Span/getInvalid)))
+
+(defn something->instant [thing]
+  (cond
+    (instance? Instant thing) thing
+
+    (string? thing)
+    ; Workaround for <Java12 due to http://bugs.openjdk.org/browse/JDK-8166138
+    ; (Instant/parse (:start_time span-data))
+    (Instant/from (.parse DateTimeFormatter/ISO_OFFSET_DATE_TIME thing))
+
+    (number? thing)
+    (Instant/ofEpochMilli thing)))
+
+(defn ingest-spans! [data service-name]
+  (log/trace (str "Ingesting spans for service '" service-name "': " (with-out-str (pprint data))))
+  (try
+    (doseq [data (:spans data)]
+      (mk-span data))
+    (catch Throwable e
+      (log/error e (str "Could not ingest trace data for service '" service-name "': " (pr-str data))))))
+
+
+(def set-tracing-hooks! (util/hook-setter [on-start-span get-sdk mk-span]))
+
+#_(with-span ["Foo"]
+  (println "Hi from foo")
+  (with-span ["Bar" {:key "value"}]
+    (println "Bar")
+    ;(set-span-status :ERROR)
+    )
+  (with-span ["Baz" {:t 42}]
+    (Thread/sleep 20)
+    (.addEvent (Span/current) "Wake!")
+    (Thread/sleep 20)
+    ;(set-span-status :OK)
+    (println "Wake!")))

@@ -1,4 +1,4 @@
-import { chainOrSuspend, promiseToSuspension, proxy, suspensionToPromise, toPy } from "@Sk";
+import { chainOrSuspend, promiseToSuspension, proxy, suspensionToPromise, toPy, Suspension } from "@Sk";
 import type { Component } from "@runtime/components/Component";
 import type { JsComponent, RawJsComponent, WrappedJsComponent } from "./component";
 import { PY_COMPONENT, JS_COMPONENT } from "./constants";
@@ -20,13 +20,21 @@ export const toPyComponent = (jsComponent: JsComponent): Component => {
 
 const pyComponents = new WeakMap<Component, WrappedPyComponent>();
 
+function isSuspension(obj: any): obj is Suspension {
+    return obj instanceof Suspension;
+}
+
 export class WrappedPyComponent implements RawJsComponent {
     [PY_COMPONENT]: Component;
     constructor(component: Component) {
         this[PY_COMPONENT] = component;
     }
-    async _anvilSetupDom() {
-        return suspensionToPromise(() => this[PY_COMPONENT].anvil$hooks.setupDom());
+    _anvilSetupDom() {
+        const rv = this[PY_COMPONENT].anvil$hooks.setupDom();
+        if (isSuspension(rv)) {
+            return suspensionToPromise(() => rv as Suspension | HTMLElement);
+        }
+        return rv;
     }
     get _anvilDomElement() {
         return this[PY_COMPONENT].anvil$hooks.domElement;

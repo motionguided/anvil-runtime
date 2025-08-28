@@ -1,5 +1,8 @@
 -- This is the schema that will set up a new Postgres database for an Anvil server
 -- (central or dedicated)
+-- This file is not used by the migrator, but is guaranteed to be correct
+-- by the `platform/database/migrator/tests/check_migrations.py` script.
+
 -- DO NOT run this to upgrade an existing server. Obviously.
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
@@ -43,7 +46,7 @@ END$$
 CREATE TABLE db_version (version text not null, updated timestamp);
 
 --[GRANTS]--
-GRANT SELECT ON db_version TO $ANVIL_USER;
+GRANT ALL ON db_version TO $ANVIL_USER;
 GRANT EXECUTE ON FUNCTION parse_anvil_timestamp TO $ANVIL_USER;
 GRANT EXECUTE ON FUNCTION to_anvil_timestamp TO $ANVIL_USER;
 GRANT EXECUTE ON FUNCTION get_lo_size TO $ANVIL_USER;

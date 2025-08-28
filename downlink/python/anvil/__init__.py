@@ -154,14 +154,50 @@ class _AppInfo:
             return "Environment({})".format(info)
 
     def __init__(self, id, branch):
-        self.__dict__.update(id=id, branch=branch, environment=_AppInfo._Environment())
+        self.__dict__.update(
+            id=id,
+            branch=branch,
+            environment=_AppInfo._Environment(),
+        )
 
     def __setattr__(self, key, value):
         raise AttributeError("This object is read-only")
+    
+    @property
+    def package_name(self):
+        from anvil import _server
+        return _server.get_dep_config("client").get("package_name")
 
-    def _setup(self, environment={}, **kwargs):
+    def _setup(self, environment=None, **kwargs):
+        environment = environment or {}
         self.__dict__.update(kwargs)
         self.__dict__['environment'] = _AppInfo._Environment(**environment)
+    
+
+    def _config_getter(self, package_name, config_type):
+        # TODO cache these calls
+        # which is mostly relevant in the uplink case
+        # in the downlink case we override the _server.get_dep_config function
+        from anvil import _server
+        dep_config = _server.get_dep_config(config_type)
+        if dep_config is None:
+            raise RuntimeError("No dependency config found")
+
+
+        if package_name is None or package_name == dep_config.get("package_name"):
+            return dep_config.get("config", {}).get(config_type, {})
+
+        for dep in dep_config.get("dependency_code", {}).values():
+            if dep.get("package_name") == package_name:
+                return dep.get("config", {}).get(config_type, {})
+
+        raise ValueError("{} is not part of this app".format(package_name))
+
+    def get_client_config(self, package_name=None):
+        return self._config_getter(package_name, "client")
+
+    def get_server_config(self, package_name=None):
+        return self._config_getter(package_name, "server")
 
 
 app = _AppInfo(None, None)

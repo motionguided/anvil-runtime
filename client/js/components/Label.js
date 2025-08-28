@@ -1,8 +1,8 @@
 "use strict";
 
-const { getCssPrefix } = require("@runtime/runner/legacy-features");
-var PyDefUtils = require("PyDefUtils");
-const { setElementMargin, setElementPadding, getUnsetSpacing } = require("@runtime/runner/components-in-js/public-api/property-utils");
+import { getCssPrefix } from "@runtime/runner/legacy-features";
+import PyDefUtils from "PyDefUtils";
+import { setElementMargin, setElementPadding, getUnsetSpacing } from "@runtime/runner/components-in-js/public-api/property-utils";
 const {
     misceval: { isTrue },
 } = Sk;
@@ -20,7 +20,7 @@ description: |
   Labels are useful for displaying text on a form. The user cannot edit text in a label.
 */
 
-module.exports = (pyModule) => {
+const Label = (pyModule) => {
     pyModule["Label"] = PyDefUtils.mkComponentCls(pyModule, "Label", {
         properties: PyDefUtils.assembleGroupProperties(/*!componentProps(Label)!2*/ ["layout", "layout_spacing", "text", "appearance", "icon", "tooltip", "user data"], {
             text: { // override the default
@@ -61,6 +61,8 @@ module.exports = (pyModule) => {
          },
     });
 };
+
+export default Label;
 
 /*!defClass(anvil,Label,Component)!*/
 

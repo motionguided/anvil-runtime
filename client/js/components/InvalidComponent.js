@@ -1,9 +1,9 @@
 "use strict";
 
-const { getCssPrefix } = require("@runtime/runner/legacy-features");
-var PyDefUtils = require("PyDefUtils");
+import { getCssPrefix } from "@runtime/runner/legacy-features";
+import PyDefUtils from "PyDefUtils";
 
-module.exports = (pyModule) => {
+const InvalidComponent = (pyModule) => {
     pyModule["InvalidComponent"] = PyDefUtils.mkComponentCls(pyModule, "InvalidComponent", {
         properties: [
             {
@@ -26,6 +26,8 @@ module.exports = (pyModule) => {
         ),
     });
 };
+
+export default InvalidComponent;
 
 /*
  * TO TEST:

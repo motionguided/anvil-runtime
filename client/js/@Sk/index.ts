@@ -1,6 +1,8 @@
 import { GetSetDef } from "./abstr/build_native_class";
 import type { Args, Flags, Kws } from "./namespace";
 
+export type { GetSetDef };
+
 export const {
     builtin: {
         bool: { true$: pyTrue, false$: pyFalse },
@@ -34,6 +36,9 @@ export const {
         classmethod: pyClassMethod,
         staticmethod: pyStaticMethod,
         property: pyProperty,
+        method: pyMethod,
+
+        dir: pyDir,
 
         BaseException: pyBaseException,
         SystemExit: pySystemExit,
@@ -78,6 +83,7 @@ export const {
 
         checkString,
         checkBool,
+        checkNumber,
         checkInt,
         checkAnySet,
         checkBytes,
@@ -149,8 +155,8 @@ export interface pyObject {
     $r(): pyStr;
     tp$str(): pyStr;
     tp$hash: (() => number) | pyNoneType;
-    tp$getattr<R = pyObject | undefined>(attr: pyStr): R;
-    tp$getattr<R = pyObject | undefined, S extends boolean = false>(
+    tp$getattr<R extends pyObject | undefined = pyObject | undefined>(attr: pyStr): R;
+    tp$getattr<R extends pyObject | undefined = pyObject | undefined, S extends boolean = false>(
         attr: pyStr,
         canSuspend?: S
     ): S extends true ? R | Suspension : R;
@@ -263,6 +269,7 @@ export interface pyStrConstructor extends pyType<pyStr> {
     $real: pyStr;
 
     $abs: pyStr;
+    $ann: pyStr;
     $bytes: pyStr;
     $call: pyStr;
     $class: pyStr;
@@ -432,6 +439,7 @@ export interface pyList<T extends pyObject | pyObject[] = pyObject>
     valueOf(): T extends pyObject ? T[] : T;
     /** @private use with caution */
     v: T extends pyObject ? T[] : T;
+    [Symbol.iterator](): IterableIterator<T extends pyObject ? T : T[]>;
 }
 
 export interface pyTupleConstructor extends pyType<pyTuple> {
@@ -446,6 +454,7 @@ export interface pyTuple<T extends pyObject | pyObject[] = pyObject>
     valueOf(): T extends pyObject ? T[] : T;
     /** @private use with caution */
     v: T extends pyObject ? T[] : T;
+    [Symbol.iterator](): IterableIterator<T extends pyObject ? T : T[]>;
 }
 
 export interface pySetConstructor extends pyType<pySet> {
@@ -496,6 +505,14 @@ export interface pyBuiltinFunctionOrMethodConstructor extends pyType<pyFunc> {
 export interface pyBuiltinFunctionOrMethod extends pyCallable {
     constructor: pyBuiltinFunctionOrMethodConstructor;
     readonly ob$type: pyBuiltinFunctionOrMethodConstructor;
+}
+
+export interface pyMethodConstructor extends pyType<pyMethod> {
+    new (method: pyCallable, self: pyObject): pyMethod;
+}
+export interface pyMethod extends pyCallable {
+    constructor: pyMethodConstructor;
+    readonly ob$type: pyMethodConstructor;
 }
 
 export interface pyFuncConstructor extends pyType<pyFunc> {
@@ -702,7 +719,7 @@ export interface pyIndexError extends pyLookupError {
     readonly ob$type: pyIndexErrorConstructor;
 }
 export interface pyKeyErrorConstructor extends pyType<pyKeyError> {
-    new (msg?: string): pyKeyError;
+    new (msg?: string | pyObject): pyKeyError;
 }
 
 export interface pyKeyError extends pyLookupError {
@@ -872,13 +889,14 @@ export interface pyExternalError extends pyValueError {
     nativeError: any;
 }
 
-export interface Suspension<T=unknown> {
+export interface Suspension<T = unknown> {
     $isSuspension: true;
     data: T;
     child?: Suspension<T>;
     resume(): any;
     $loc?: any;
     $gbl?: any;
+    $tmps?: any;
     $filename?: string;
     $lineno?: number;
     $colno?: number;

@@ -7,7 +7,8 @@ export interface tpSlots<T> {
     tp$hash: pyNoneType | ((this: T) => number);
     tp$call(this: T, args: Args, kws?: Kws): pyObject | pyType | Suspension;
     tp$str(this: T): pyStr;
-    tp$getattr(this: T, attr: pyStr, canSuspend?: boolean): pyObject | undefined;
+    // tp$getattr(this: T, attr: pyStr, canSuspend?: boolean): pyObject | undefined;
+    tp$getattr(this: T, attr: pyStr, canSuspend?: boolean): pyObject | Suspension | undefined;
     /** a value of undefined signals deleting an attribute */
     tp$setattr(this: T, attr: pyStr, value: pyObject | undefined, canSuspend?: boolean): void;
     // tp$flags;
@@ -93,14 +94,14 @@ export interface numberSlots<T> {
     nb$imatmul(this: T, other: pyObject): pyObject | pyNotImplementedType;
 }
 
-export interface seqMapSlots {
-    mp$subscript(item: pyObject): pyObject;
+export interface seqMapSlots<T> {
+    mp$subscript(this: T, item: pyObject): pyObject;
     /** a value of undefined signals deleting an item */
-    mp$ass_subscript(item: pyObject, val?: pyObject): pyObject;
-    sq$length(): number;
-    sq$concat(other: pyObject): pyObject;
-    sq$inplace_concat(other: pyObject): pyObject;
-    sq$repeat(other: pyObject): pyObject;
-    sq$inplace_repeat(other: pyObject): pyObject;
-    sq$contains(other: pyObject): boolean;
+    mp$ass_subscript(this: T, item: pyObject, val?: pyObject): void;
+    sq$length(this: T): number;
+    sq$concat(this: T, other: pyObject): pyObject;
+    sq$inplace_concat(this: T, other: pyObject): pyObject;
+    sq$repeat(this: T, other: pyObject): pyObject;
+    sq$inplace_repeat(this: T, other: pyObject): pyObject;
+    sq$contains(this: T, other: pyObject): boolean;
 }

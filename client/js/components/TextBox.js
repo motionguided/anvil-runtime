@@ -1,7 +1,7 @@
 "use strict";
 
-const { getCssPrefix } = require("@runtime/runner/legacy-features");
-var PyDefUtils = require("PyDefUtils");
+import { getCssPrefix } from "@runtime/runner/legacy-features";
+import PyDefUtils from "PyDefUtils";
 
 /*#
 id: textbox
@@ -15,9 +15,7 @@ description: |
 
   Text boxes allow users to edit text on your forms.
 
-  A TextBox can only edit a single line of text. If you want to accept multiple lines of input, use a [TextArea](#textarea)
-
-  ![Screenshot](img/screenshots/textbox.png)
+  A TextBox can only edit a single line of text. If you want to accept multiple lines of input, use a [TextArea](#textarea).
 
   Set a TextBox to have focus by calling its `focus()` method. Select all its text with the `select()` method.
 
@@ -28,7 +26,7 @@ description: |
   The `text` property of a TextBox can trigger write-back of data bindings. This occurs before the `lost_focus` and `pressed_enter` events.
 */
 
-module.exports = (pyModule) => {
+const TextBox = (pyModule) => {
 
     const { isTrue } = Sk.misceval;
 
@@ -197,6 +195,8 @@ module.exports = (pyModule) => {
     });
 
 };
+
+export default TextBox;
 
 /*!defClass(anvil,TextBox,Component)!*/
 

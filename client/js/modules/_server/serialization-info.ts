@@ -162,7 +162,7 @@ export const SerializationInfo: SerializationInfoType = buildNativeClass("anvil.
             } else if (typeof key === "string") {
                 key = new pyStr(":" + key);
             } else if (key instanceof pyType) {
-                const serializableName = key.anvil$serializableName;
+                const serializableName = getPortableClassTypeName(key);
                 key = serializableName ?? `${lookupSpecial(key, pyStr.$module)}.${lookupSpecial(key, pyStr.$name)}`;
             } else {
                 key = ":" + key.toString();
@@ -211,3 +211,27 @@ export const SerializationInfo: SerializationInfoType = buildNativeClass("anvil.
         },
     },
 });
+
+const s_SERIALIZATION_INFO = new pyStr("SERIALIZATION_INFO");
+
+export function setPortableClassSerializationInfo(pyClass: pyType, name: string) {
+    const value = new pyTuple([new pyStr(name), pyClass]);
+    try {
+        pyClass.tp$setattr(s_SERIALIZATION_INFO, value);
+    } catch (e) {
+        // this happens for anvil.js.ProxyType or other native classes
+        if (!(pyClass instanceof pyType)) {
+            throw e;
+        }
+        // a bit of a hack
+        pyClass.prototype[s_SERIALIZATION_INFO.toString()] = value;
+    }
+}
+
+export function getPortableClassTypeName(obj: pyObject): pyStr | undefined {
+    return obj?.tp$getattr?.(s_SERIALIZATION_INFO)?.v[0];
+}
+
+export function getPortableClassSerializationInfo(obj: pyObject): [pyStr, pyType] | [] {
+    return obj?.tp$getattr?.(s_SERIALIZATION_INFO)?.v ?? [];
+}

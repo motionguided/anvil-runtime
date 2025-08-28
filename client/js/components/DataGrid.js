@@ -1,9 +1,12 @@
 "use strict";
 
-var PyDefUtils = require("PyDefUtils");
-import { validateChild } from "./Container";
+import PyDefUtils from "PyDefUtils";
+import { indexInRange, validateChild } from "./Container";
 import { getCssPrefix } from "@runtime/runner/legacy-features";
 import { isInvisibleComponent } from "./helpers";
+import { pyCall, pyStr, pyTrue } from "@Sk";
+import { s_add_component, s_remove_from_parent } from "@runtime/runner/py-util";
+import { getPyParent } from "./Component";
 
 /*#
 id: datagrid
@@ -67,7 +70,7 @@ description: |
   Learn more about Data Grids in our [Data Grid Tutorials](/blog/data-grids)
 */
 
-module.exports = function(pyModule) {
+const DataGrid = (pyModule) => {
 
     const { isTrue } = Sk.misceval;
 
@@ -152,7 +155,7 @@ module.exports = function(pyModule) {
             {
                 name: "pinned",
                 type: "boolean",
-                description: "Whether this component should show on every page of the grid",
+                description: "Whether this component should show on every page of the grid. Only affects DataRowPanels added to this DataGrid.",
                 defaultValue: false,
                 important: true,
                 priority: 0,
@@ -227,7 +230,8 @@ module.exports = function(pyModule) {
             $loc["add_component"] = PyDefUtils.funcWithKwargs(function add_component(kwargs, self, component) {
                 validateChild(component);
                 
-                const { index, pinned, slot } = kwargs;
+                let { index, pinned, slot } = kwargs;
+                index = indexInRange(index, self);
 
                 return Sk.misceval.chain(
                     component.anvil$hooks.setupDom(),
@@ -247,7 +251,7 @@ module.exports = function(pyModule) {
                         const elts = self._anvil.elements.childPanel.children;
                         if (slot === "footer") {
                             self._anvil.elements.footerSlot.appendChild(celt);
-                        } else if (typeof index === "number" && index < elts.length) {
+                        } else if (typeof index === "number") {
                             childPanel.insertBefore(celt, elts[index]);
                         } else {
                             childPanel.appendChild(celt);
@@ -269,7 +273,7 @@ module.exports = function(pyModule) {
             // (apart from the conditional slicing off of the automatic header)
             $loc["__serialize__"] = PyDefUtils.mkSerializePreservingIdentity(function (self) {
                 const v = [];
-                for (let n in self._anvil.props) {
+                for (const n in self._anvil.props) {
                     v.push(new Sk.builtin.str(n), self._anvil.props[n]);
                 }
                 const d = new Sk.builtin.dict(v);
@@ -277,7 +281,7 @@ module.exports = function(pyModule) {
                 if (self._anvil.getPropJS("auto_header")) {
                     components = components.slice(1);
                 }
-                components = components.map((c) => new Sk.builtin.tuple([c.component, Sk.ffi.remapToPy(c.layoutProperties)]));
+                components = components.map((c) => new Sk.builtin.tuple([c.component, Sk.ffi.toPy(c.layoutProperties)]));
                 d.mp$ass_subscript(new Sk.builtin.str("$_components"), new Sk.builtin.list(components));
                 return d;
             });
@@ -293,14 +297,14 @@ module.exports = function(pyModule) {
         },
     });
 
-    let updateColStyles = (self, cols) => {
+    const updateColStyles = (self, cols) => {
         const prefix = getCssPrefix();
-        let style = self._anvil.styleSheet;
+        const style = self._anvil.styleSheet;
 
         while(style.cssRules.length > 0) {
             style.deleteRule(0);
         }
-        for (let col of cols || []) {
+        for (const col of cols || []) {
             let rule = `.${prefix}data-row-col[data-grid-id="${self._anvil.dataGridId}"][data-grid-col-id="${col.id}"] {`;
 
             if (col.width)
@@ -315,10 +319,12 @@ module.exports = function(pyModule) {
             style.insertRule(rule+"}",0);
         }
 
-    }
+    };
 
-    let updateColumns = (self, element) => {
-        let cols = self._anvil.getPropJS("columns");
+    const s_item = new pyStr("item");
+
+    const updateColumns = (self, element) => {
+        const cols = self._anvil.getPropJS("columns");
         const prefix = getCssPrefix();
 
         self._anvil.updateColStyles(cols);
@@ -331,44 +337,46 @@ module.exports = function(pyModule) {
             .map((_,e) => $(e).data("anvilPyComponent"))
             .each((_,c) => c._anvil.updateColumns(true));
 
-        let h = element.find(`.${prefix}auto-grid-header`).map((_,e) => $(e).data("anvilPyComponent"));
+        let h = self._anvil.autoGridComponent;
         if (isTrue(self._anvil.getProp("auto_header"))) {
-            let headerData = {};
-            for (let c of cols || []) {
+            const headerData = {};
+            for (const c of cols || []) {
                 headerData[c.id] = c.title;
             }
 
-            if (h.length === 0) {
-                h = PyDefUtils.pyCall(pyModule["DataRowPanel"], [], ["bold", Sk.builtin.bool.true$]);
+            if (!h) {
+                h = pyCall(pyModule["DataRowPanel"], [], ["bold", pyTrue]);
                 h._anvil.autoGridHeader = true;
+                self._anvil.autoGridComponent = h;
                 h._anvil.domNode.classList.add("anvil-designer-no-hit", `${prefix}auto-grid-header`);
                 // h._anvil.domNode.classList.remove(prefix + "hide-while-paginating");
-                PyDefUtils.pyCall(self.tp$getattr(new Sk.builtin.str("add_component")), [h], ["index", new Sk.builtin.int_(0)])
-            } else {
-                h = h[0];
+
             }
-            h.tp$setattr(new Sk.builtin.str("item"), Sk.ffi.remapToPy(headerData));
-        } else if (h.length > 0) {
-            Sk.misceval.callsim(h[0].tp$getattr(new Sk.builtin.str("remove_from_parent")));
+            h.tp$setattr(s_item, Sk.ffi.toPy(headerData));
+            if (!getPyParent(h)) {
+                pyCall(self.tp$getattr(s_add_component), [h], ["index", new Sk.builtin.int_(0)]);
+            }
+        } else if (h) {
+            pyCall(h.tp$getattr(s_remove_from_parent));
         }
 
         //self._anvil.paginate();
         self._anvil.afterUpdateColumns?.();
-    }
+    };
 
     // self._anvil.pagination = { startAfter: object, rowQuota: number}
-    let paginate = (self, updatedChild=null) => {
+    const paginate = (self, updatedChild=null) => {
         if (self._anvil.pagination) {
 
 
             let childIdx = -1;
-            let rowQuotaForChildren = self._anvil.pagination.rowQuota
+            let rowQuotaForChildren = self._anvil.pagination.rowQuota;
             if (updatedChild && updatedChild._anvil.pagination) {
                 childIdx = self._anvil.components.findIndex(c => c.component === updatedChild);
                 rowQuotaForChildren = self._anvil.lastChildPagination.reduce((remaining, child, idx) => (child && idx < childIdx) ? remaining - child[0] : remaining, self._anvil.pagination.rowQuota);
                 rowQuotaForChildren -= updatedChild._anvil.pagination.rowsDisplayed;
 
-                let oldChildRowCount = self._anvil.lastChildPagination[childIdx] && self._anvil.lastChildPagination[childIdx][0];
+                const oldChildRowCount = self._anvil.lastChildPagination[childIdx] && self._anvil.lastChildPagination[childIdx][0];
                 self._anvil.lastChildPagination[childIdx] = [updatedChild._anvil.pagination.rowsDisplayed, updatedChild._anvil.pagination.stoppedAt, updatedChild._anvil.pagination.done];
 
                 if (self._anvil.pagination.startAfter && self._anvil.pagination.startAfter[0] == childIdx) {
@@ -412,7 +420,7 @@ module.exports = function(pyModule) {
             // TODO: Work out whether to draw everything or nothing, and whether to remember and do something on addedToPage. Or not.
             //debugger;
         }
-    }
+    };
 
 };
 
@@ -429,3 +437,4 @@ module.exports = function(pyModule) {
 
 
 
+export default DataGrid;

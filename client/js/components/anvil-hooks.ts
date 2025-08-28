@@ -14,11 +14,11 @@ import {
     pyType,
     pyValueError,
     pyWrapperDescriptor,
+    remapToJsOrWrap,
     retryOptionalSuspensionOrThrow,
     toJs,
     toPy,
     type Suspension,
-    remapToJsOrWrap,
 } from "@Sk";
 import {
     s_anvil_disable_drop_mode,
@@ -28,14 +28,15 @@ import {
     s_anvil_get_container_design_info,
     s_anvil_get_interactions,
     s_anvil_get_section_dom_element,
-    s_anvil_get_sections, s_anvil_get_unset_property_values,
+    s_anvil_get_sections,
+    s_anvil_get_unset_property_values,
     s_anvil_properties,
     s_anvil_set_section_property_values,
     s_anvil_setup_dom,
     s_anvil_update_design_name,
     s_anvil_update_layout_properties,
 } from "@runtime/runner/py-util";
-import {AnvilHookSpec, AnvilHooks, Component, ComponentConstructor, UnsetPropertyValues} from "./Component";
+import { AnvilHookSpec, AnvilHooks, Component, ComponentConstructor } from "./Component";
 
 /**
 # The Anvil hook machinery
@@ -155,7 +156,7 @@ const anvilHookPyWrapperDescriptors: Partial<Record<AnvilKeys, WrapperDescriptor
         $wrapper(self, args, _kws) {
             return toPy(this.call(self, toJs(args[0]), toJs(args[1])));
         },
-        $flags: {MinArgs: 2, MaxArgs: 2},
+        $flags: { MinArgs: 2, MaxArgs: 2 },
     },
     disableDropMode: {
         $name: "_anvil_disable_drop_mode_",

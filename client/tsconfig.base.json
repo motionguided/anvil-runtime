@@ -1,0 +1,19 @@
+{
+    "compilerOptions": {
+        "target": "ESNext",
+        "lib": ["dom", "dom.iterable", "esnext"],
+        "allowJs": true,
+        "noEmit": true,
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "esModuleInterop": true,
+        "forceConsistentCasingInFileNames": true,
+        "strict": true,
+        "isolatedModules": true,
+        "allowUmdGlobalAccess": true,
+        "sourceMap": true,
+        "resolveJsonModule": true,
+        "allowImportingTsExtensions": true,
+        "allowArbitraryExtensions": true
+    }
+}

@@ -17,6 +17,7 @@ import {
     buildPyClass,
     chainOrSuspend,
     checkOneArg,
+    isTrue,
     Kws,
     objectRepr,
     pyCall,
@@ -106,8 +107,8 @@ const PluggableUI = buildNativeClass("anvil.PluggableUI", {
                             ourUpdates.mp$ass_subscript(key, value);
                         }
                     }
-                    if (ourUpdates.sq$length()) {
-                        listenerCalls.push(() => pyCallOrSuspend(l.function, [ourUpdates]));
+                    if (isTrue(ourUpdates)) {
+                        listenerCalls.push(() => pyCallOrSuspend(l.function, [ourUpdates], ["provider", packageName]));
                     }
                 }
 
@@ -175,7 +176,7 @@ export const pluggableUI = new PluggableUI();
 export const setupDefaultAnvilPluggableUI = (anvilModule: { [name: string]: pyObject }) => {
     const builtinComposites = { __name__: new pyStr("_builtin_composites") };
 
-    for (const name of ["TextBox", "TextArea", "Button", "CheckBox", "RadioButton"]) {
+    for (const name of ["TextBox", "TextArea", "Button", "CheckBox", "RadioButton", "modal"]) {
         hooks.mp$ass_subscript(new pyStr("anvil." + name), anvilModule[name]);
     }
 

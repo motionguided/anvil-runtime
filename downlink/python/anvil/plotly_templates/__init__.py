@@ -8,6 +8,7 @@ except AttributeError:
 
 _cache = {}
 
+
 def _get_pio():
     try:
         import plotly.io as pio
@@ -17,18 +18,24 @@ def _get_pio():
         return pio
 
 
+def _resolve_theme_alias(theme):
+    if theme == "rally":
+        return "rally_dark"
+    return theme
+
+
 def _register_template(name, defn):
     pio = _get_pio()
     if pio is None:
         return
-    
+
     if name not in pio.templates:
         pio.templates[name] = _TemplateFactory(**defn)
 
 
-
 class Templates:
     def __getitem__(self, theme):
+        theme = _resolve_theme_alias(theme)
         try:
             return _cache[theme]
         except KeyError:
@@ -65,6 +72,7 @@ templates = Templates()
 #!defFunction(anvil.plotly_templates,_,template)!2: "Sets the default plotly template" ["set_default"]
 def set_default(template):
     pio = _get_pio()
+    template = _resolve_theme_alias(template)
 
     if pio is None:
         go.Figure._default_template = template
@@ -73,7 +81,6 @@ def set_default(template):
         pio.templates.default = template
     else:
         pio.templates.default = template
-
 
 
 def _get_template(self, template):

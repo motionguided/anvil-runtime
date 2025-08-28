@@ -15,6 +15,7 @@ path_whitelist:
   - anvil/tables/v2/_batcher.py
   - anvil/tables/v2/_constants.py
   - anvil/tables/v2/_load_hacks.py
+  - anvil/tables/v2/_model.py
   - anvil/tables/v2/_refs.py
   - anvil/tables/v2/_row.py
   - anvil/tables/v2/_search.py

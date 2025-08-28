@@ -8,6 +8,6 @@ interface ClassicComponent {
 }
 
 // Because Timers
-export function isInvisibleComponent(component: ClassicComponent) {
+export function isInvisibleComponent(component: any) {
     return component._anvil?.metadata?.invisible;
 }

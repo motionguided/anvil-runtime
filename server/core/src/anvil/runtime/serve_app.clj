@@ -44,14 +44,17 @@
 
 (def set-app-embedding-impl! (util/hook-setter #{get-embedding-restrictions}))
 
+(defn is-asset [v]
+  (and (string? v) (re-matches #"asset:(.*)" v)))
+
+(defn- get-image-url [app-origin url]
+  (if-let [[_ n] (is-asset url)]
+    (str app-origin "/_/theme/" (util/real-actual-genuine-url-encoder n))
+    url))
 
 ;; Utilities also used from outside
-(defn image-from-metadata [app-origin metadata key not-found]
-  (let [img-url (fn [url]
-                  (if-let [[_ n] (when url (re-matches #"asset:(.*)" url))]
-                    (str app-origin "/_/theme/" (util/real-actual-genuine-url-encoder n))
-                    url))]
-    (util/or-str (img-url (get metadata key)) (str conf/static-root-url not-found))))
+(defn image-from-metadata-asset-or-url [app-origin asset-or-url not-found]
+  (util/or-str (get-image-url app-origin asset-or-url) (str conf/static-root-url not-found)))
 
 (defn render-app-description [description]
   (hiccup-util/escape-html
@@ -129,15 +132,15 @@
 
 ;; Static sha values can be found in commented out code in the built html files
 (def legacy-runtime-templates
-  {"{{legacy-bootstrap-css}}" "<link rel=\"stylesheet\" href=\"{{app-origin}}/_/static/runtime/css/bootstrap.css?sha=c72a0381af84afb75234\" crossorigin/>\n<link rel=\"stylesheet\" href=\"{{app-origin}}/_/static/runtime/css/bootstrap-theme.min.css?sha=42cf18f709a52a7f4a0a\" crossorigin/>\n<link rel=\"stylesheet\" href=\"{{app-origin}}/_/static/runtime/node_modules/animate.css/animate.min.css?sha=b99997f8705218b0610b\" crossorigin/>"
-   "{{legacy-bootstrap-js}}" "<script src=\"{{app-origin}}/_/static/runtime/node_modules/bootstrap/dist/js/bootstrap.min.js?sha=14a09c1d8116fd5b43e4\" crossorigin></script>"
-   "{{legacy-classnames}}" "<link rel=\"stylesheet\" href=\"{{app-origin}}/_/static/runtime/dist/runner.min.css?sha=adc877189c16a1666010\" crossorigin/>"
+  {"{{legacy-bootstrap-css}}" "<link rel=\"stylesheet\" href=\"{{app-origin}}/_/static/runtime/css/bootstrap.css?sha=c72a0381af84afb75234\" crossorigin/>\n<link rel=\"stylesheet\" href=\"{{app-origin}}/_/static/runtime/css/bootstrap-theme.min.css?sha=42cf18f709a52a7f4a0a\" crossorigin/>\n<link rel=\"stylesheet\" href=\"{{app-origin}}/_/static/runtime/css/lib/animate.min.css?sha=b99997f8705218b0610b\" crossorigin/>"
+   "{{legacy-bootstrap-js}}" "<script src=\"{{app-origin}}/_/static/runtime/js/lib/bootstrap.min.js?sha=14a09c1d8116fd5b43e4\" crossorigin></script>"
+   "{{legacy-classnames}}" "<link rel=\"stylesheet\" href=\"{{app-origin}}/_/static/runtime/dist/static/css/runner.min.css?sha=adc877189c16a1666010\" crossorigin/>"
    "{{legacy-head-class}}" "runner"})
 
 (def legacy-designer-templates
-  {"{{legacy-bootstrap-css}}" "<link rel=\"stylesheet\" href=\"{{cdn-origin}}/runtime/css/bootstrap.css?sha=c72a0381af84afb75234\" crossorigin/>\n<link rel=\"stylesheet\" href=\"{{cdn-origin}}/runtime/css/bootstrap-theme.min.css?sha=42cf18f709a52a7f4a0a\" crossorigin/>\n<link rel=\"stylesheet\" href=\"{{cdn-origin}}/runtime/node_modules/animate.css/animate.min.css?sha=b99997f8705218b0610b\" crossorigin/>"
-   "{{legacy-bootstrap-js}}" "<script src=\"{{cdn-origin}}/runtime/node_modules/bootstrap/dist/js/bootstrap.min.js?sha=14a09c1d8116fd5b43e4\" crossorigin></script>"
-   "{{legacy-classnames}}" "<link rel=\"stylesheet\" href=\"{{cdn-origin}}/runtime/dist/runner.min.css?sha=adc877189c16a1666010\" crossorigin/>\n<link rel=\"stylesheet\" href=\"{{cdn-origin}}/runtime/css/designer.css?sha=fb36a2a2289ed3972433\" crossorigin/>"
+  {"{{legacy-bootstrap-css}}" "<link rel=\"stylesheet\" href=\"{{cdn-origin}}/runtime/css/bootstrap.css?sha=c72a0381af84afb75234\" crossorigin/>\n<link rel=\"stylesheet\" href=\"{{cdn-origin}}/runtime/css/bootstrap-theme.min.css?sha=42cf18f709a52a7f4a0a\" crossorigin/>\n<link rel=\"stylesheet\" href=\"{{cdn-origin}}/runtime/css/lib/animate.min.css?sha=b99997f8705218b0610b\" crossorigin/>"
+   "{{legacy-bootstrap-js}}" "<script src=\"{{cdn-origin}}/runtime/js/lib/bootstrap.min.js?sha=14a09c1d8116fd5b43e4\" crossorigin></script>"
+   "{{legacy-classnames}}" "<link rel=\"stylesheet\" href=\"{{cdn-origin}}/runtime/dist/static/css/runner.min.css?sha=adc877189c16a1666010\" crossorigin/>\n<link rel=\"stylesheet\" href=\"{{cdn-origin}}/runtime/css/designer.css?sha=fb36a2a2289ed3972433\" crossorigin/>"
    "{{legacy-head-class}}" "designer"})
 
 ;; :__dict__ not required since it's implementation is executed at runtime
@@ -156,6 +159,16 @@
       (map-kv-vals (fn [k v] (if (get legacy-features (template-key-to-legacy-key k)) v "")) legacy-templates))))
 
 
+(defn get-other-meta-fields [app-origin meta]
+  (let [meta (dissoc meta :og:title :title :og:type :og:url :og:image :og:description :description)]
+    (reduce-kv (fn [r name content]
+                  (let [content (if (is-asset content)
+                                  (get-image-url app-origin content)
+                                  (hiccup-util/escape-html content))
+                        name (hiccup-util/escape-html name)]
+                    (str r "<meta name=\"" name "\" content=\"" content "\">\n")))
+              "" meta)))
+
 ;; The meat of this logic
 
 (defn serve-app [{:keys [app-id environment environment-from-url app-session] :as req} client-params {:keys [action print-id print-key form-name module-name form-arg-json replace-url app-startup-data-json] :as what-to-do}]
@@ -167,7 +180,8 @@
                                                        app-session {})
           environment (assoc environment :commit-id commit-id)
           _ (checkpoint! "YAML loaded")
-          meta (merge (:metadata app-map) (:override-meta what-to-do))
+          meta-overrides (:override-meta what-to-do)
+          app-meta-data (merge (:metadata app-map) meta-overrides)
           app-map (assoc-in (dissoc app-map :metadata) [:theme :vars] (:theme-vars style))
           app-origin (:app-origin req)
 
@@ -206,54 +220,62 @@
             (-> (runtime-util/serve-templated-html
                   req (runtime-util/runtime-client-resource req "/dist/runner2.html")
                   (inject-legacy-features app-map)
-                  {"{{body-class}}"         (or body-class "")
-                   "{{app-name}}"           (hiccup-util/escape-html
-                                              (util/or-str (:title meta) (:name app-info) (:name app-map)))
-                   "{{app-title}}"          (hiccup-util/escape-html
-                                              (util/or-str (:title meta) (:name app-info) (:name app-map)))
-                   "{{ms-tile-image}}"      (image-from-metadata app-origin meta :logo_img "/mstile-144x144.png")
-                   "{{favicon}}"            (image-from-metadata app-origin meta :logo_img "/favicon-96x96.png")
-                   "{{social-image}}"       (image-from-metadata app-origin meta :logo_img "/img/logo-square-padded.png")
-                   "{{description}}"        (render-app-description (:description meta))
-                   "{{canonical-url}}"      (hiccup-util/escape-html app-origin)
-                   "{{environment-origin}}" (hiccup.util/escape-html (app-data/get-app-origin environment))
-                   "{{anvil-version}}"      conf/anvil-version
-                   "{{google-api-key}}"     (or google-api-key "")
-                   "{{session-token}}"      (or (:session-url-token req)
-                                                (get-in @app-session [::sessions/tokens :url])
-                                                (get-in @app-session [::sessions/tokens :burned])
-                                                "")
-                   "{{manifest-url}}"       (str (hiccup-util/escape-html app-origin) "/_/manifest.json")
-                   "{{theme-color}}"        (:primary-color style)
-                   "{{shim-css}}"           (:css-shims style)
-                   "{{theme-css}}"          (:css style)
+                  {"{{body-class}}"          (or body-class "")
+                   "{{app-name}}"            (hiccup-util/escape-html
+                                               (util/or-str (:name app-info) (:name app-map)))
+                   "{{app-title}}"           (hiccup-util/escape-html
+                                               (util/or-str (:title app-meta-data) (:name app-info) (:name app-map)))
+                   "{{meta-title}}"          (hiccup-util/escape-html
+                                               (util/or-str (:title app-meta-data) (:name app-info) (:name app-map)))
+                   "{{meta-og-title}}"       (hiccup-util/escape-html
+                                               (util/or-str (:og:title app-meta-data) (:title app-meta-data) (:name app-info) (:name app-map)))
+                   "{{meta-description}}"    (render-app-description (:description app-meta-data))
+                   "{{meta-og-description}}" (render-app-description (util/or-str (:og:description app-meta-data) (:description app-meta-data)))
+                   "{{meta-og-image}}"       (image-from-metadata-asset-or-url app-origin (util/or-str (:og:image app-meta-data) (:logo_img app-meta-data)) "/img/logo-square-padded.png")
+                   "{{meta-fields}}"         (get-other-meta-fields app-origin meta-overrides)
+                   "{{ms-tile-image}}"       (image-from-metadata-asset-or-url app-origin (:logo_img app-meta-data) "/mstile-144x144.png")
+                   "{{favicon}}"             (image-from-metadata-asset-or-url app-origin (:logo_img app-meta-data) "/favicon-96x96.png")
+                   "{{social-image}}"        (image-from-metadata-asset-or-url app-origin (:logo_img app-meta-data) "/img/logo-square-padded.png")
+                   "{{description}}"         (render-app-description (:description app-meta-data))
+                   "{{canonical-url}}"       (hiccup-util/escape-html app-origin)
+                   "{{environment-origin}}"  (hiccup.util/escape-html (app-data/get-app-origin environment))
+                   "{{anvil-version}}"       conf/anvil-version
+                   "{{google-api-key}}"      (or google-api-key "")
+                   "{{session-token}}"       (or (:session-url-token req)
+                                                 (get-in @app-session [::sessions/tokens :url])
+                                                 (get-in @app-session [::sessions/tokens :burned])
+                                                 "")
+                   "{{manifest-url}}"        (str (hiccup-util/escape-html app-origin) "/_/manifest.json")
+                   "{{theme-color}}"         (:primary-color style)
+                   "{{shim-css}}"            (:css-shims style)
+                   "{{theme-css}}"           (:css style)
                    ;;    "{{theme-spinner}}"      (get-spinner req) ;; TODO - support customizing the svg spinner
-                   "{{root-vars}}"          (:root-vars style)
-                   "{{head-html}}"          head-html
-                   "{{extra-snippets}}"     (get-service-snippets app-map)
-                   "{{app-info-object}}"    (util/write-json-str (runtime-util/get-runtime-app-info environment))
-                   "{{load-app-code}}"      (str "\n$(function() {"
-                                                 (when replace-url
-                                                   (str "window.history.replaceState(window.history.state, \"\", " (util/write-json-str replace-url) ");"))
-                                                 (get-service-code app-map)
-                                                 "const loadApp = window.loadApp(" (util/write-json-str (merge {"app"            app-map
-                                                                                                                "appId"          app-id
-                                                                                                                "appOrigin"      app-origin
-                                                                                                                "appStartupData" app-startup-data-json}
-                                                                                                               client-params)) ");"
-                                                 "const loadAppAfter = window.anvil._loadAppAfter || [];"
-                                                 "loadApp.then(function() { Promise.all(loadAppAfter).then(function() {"
-                                                 (condp = action
-                                                   :run-app (let [startup (or (:startup app-map) {:type "form" :module (:startup_form app-map)})]
-                                                              (if (= "module" (:type startup))
-                                                                (str "window.openMainModule(" (util/write-json-str (:module startup)) ");")
-                                                                (str "window.openForm(" (util/write-json-str (:module startup)) ");")))
-                                                   :open-module (str "window.openMainModule(" (util/write-json-str module-name) ");")
-                                                   :open-form (str "window.openForm(" (util/write-json-str form-name) ");")
-                                                   :print (str "window.printComponents(" (util/write-json-str print-id) "," (util/write-json-str print-key) ");"))
-                                                 "});"
-                                                 "});"
-                                                 "});")})
+                   "{{root-vars}}"           (:root-vars style)
+                   "{{head-html}}"           head-html
+                   "{{extra-snippets}}"      (get-service-snippets app-map)
+                   "{{app-info-object}}"     (util/write-json-str (runtime-util/get-runtime-app-info environment))
+                   "{{load-app-code}}"       (str "\n$(function() {"
+                                                  (when replace-url
+                                                    (str "window.history.replaceState(window.history.state, \"\", " (util/write-json-str replace-url) ");"))
+                                                  (get-service-code app-map)
+                                                  "const loadApp = window.loadApp(" (util/write-json-str (merge {"app"            app-map
+                                                                                                                 "appId"          app-id
+                                                                                                                 "appOrigin"      app-origin
+                                                                                                                 "appStartupData" app-startup-data-json}
+                                                                                                                client-params)) ");"
+                                                  "const loadAppAfter = window.anvil._loadAppAfter || [];"
+                                                  "loadApp.then(function() { Promise.all(loadAppAfter).then(function() {"
+                                                  (condp = action
+                                                    :run-app (let [startup (or (:startup app-map) {:type "form" :module (:startup_form app-map)})]
+                                                               (if (= "module" (:type startup))
+                                                                 (str "window.openMainModule(" (util/write-json-str (:module startup)) ");")
+                                                                 (str "window.openForm(" (util/write-json-str (:module startup)) ");")))
+                                                    :open-module (str "window.openMainModule(" (util/write-json-str module-name) ");")
+                                                    :open-form (str "window.openForm(" (util/write-json-str form-name) ");")
+                                                    :print (str "window.printComponents(" (util/write-json-str print-id) "," (util/write-json-str print-key) ");"))
+                                                  "});"
+                                                  "});"
+                                                  "});")})
                 (resp/header "Referrer-Policy" "no-referrer")
                 (resp/header "X-UA-Compatible" "IE=edge")
                 (resp/header "Content-Type" "text/html")
@@ -346,10 +368,11 @@
 (defn- handle-app-response [wrap-response channel request client-params app-session body]
   (serialiser/serialise-to-map-with-media
     (get-app-response-object-to-serialize body)
-    (fn [json-data json-media]
+    (fn on-complete [json-data json-media]
       (send! channel
         (wrap-response (serve-app request client-params
                                   (get-app-response-serve-object body json-data json-media)))))
+    (fn on-error [{:keys [cause]}] (send! channel (wrap-response (app-500 request (or (:message cause) "An internal error has occurred")))))
     {:extra-liveobject-key (browser-ws/get-session-liveobject-secret app-session)}))
 
 
@@ -475,8 +498,11 @@
                                                       (resp/content-type (.getContentType ^MediaDescriptor body))
                                                       (with-safe-anvil-cookies request headers anvil-cookies-updated?)) false)
                                    (types/consume ^ChunkedStream body
-                                                  (fn [chunk-idx last-chunk? data]
-                                                    (send! channel {:body (ByteArrayInputStream. data)} last-chunk?))))
+                                                  (fn on-chunk [_chunk-idx last-chunk? data]
+                                                    (send! channel {:body (ByteArrayInputStream. data)} last-chunk?))
+                                                  (fn on-error [_error]
+                                                    ; We can't change the HTTP status anymore, so the best we can do is end the partial response
+                                                    (send! channel {:body ""} true))))
 
                                  (string? body)
                                  (send! channel (-> {:body   body,

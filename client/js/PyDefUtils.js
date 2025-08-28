@@ -1,6 +1,6 @@
 "use strict";
 
-const {
+import {
     Args,
     Kws,
     Suspension,
@@ -17,9 +17,11 @@ const {
     remapToJsOrWrap,
     toJs,
     toPy,
-} = require("@Sk");
-const { notifyVisibilityChange } = require("./components/Component");
-const {
+    pyInt,
+    pyRuntimeError,
+} from "@Sk";
+import { notifyVisibilityChange } from "./components/Component";
+import {
     getMarginStyles,
     getPaddingStyles,
     getUnsetMargin,
@@ -30,10 +32,11 @@ const {
     setElementPadding,
     setElementSpacing,
     styleObjectToString,
-} = require("./runner/components-in-js/public-api/property-utils");
-const { getCssPrefix, hasLegacyDict } = require("./runner/legacy-features");
-const { funcFastCall, getImportedModule, kwsToObj, pyTryFinally, s_raise_event, jsObjToKws } = require("./runner/py-util");
-const { defer } = require("./utils");
+} from "./runner/components-in-js/public-api/property-utils";
+import { getCssPrefix, hasLegacyDict } from "./runner/legacy-features";
+import { funcFastCall, getImportedModule, kwsToObj, pyTryFinally, s_raise_event, jsObjToKws, s_SERIALIZATION_INFO } from "./runner/py-util";
+import { defer } from "./utils";
+import { getPortableClassTypeName } from "./modules/_server/serialization-info";
 
 var PyDefUtils = {};
 
@@ -498,15 +501,20 @@ PyDefUtils.callAsync = (func, kwDict, varargseq, kws, ...args) =>
         throw e;
     });
 
-// When we internally call asyncToPromise,
-// we ignore the first optional supsension
-// this is perfect for event handlers that may have not fired since the previous Sk.lastYield
-// otherwise handlers may immediately throw an optional Sk.yield suspension (if Sk.yieldLimit is configured)
-//
-// Note we could continue to resume optional suspensions in a while loop
-// (see WrappedPyCallable)
-// but since the next optional suspension we hit
-// will be the result of long running code we only ignore the first one.
+/**
+ * When we internally call asyncToPromise,
+ * we ignore the first optional suspension
+ * this is perfect for event handlers that may have not fired since the previous Sk.lastYield
+ * otherwise handlers may immediately throw an optional Sk.yield suspension (if Sk.yieldLimit is configured)
+ * Note we only use Sk.yieldLimit when running in the IDE
+ * This causes unusual effects - e.g. in a button that triggers a google sign in
+ * Will then maybe suspend, causing an extra dialogue to appear - which wouldn't happen in production
+ *
+ * Note we could continue to resume optional suspensions in a while loop
+ * (see WrappedPyCallable)
+ * but since the next optional suspension we hit
+ * will be the result of long running code we only ignore the first one.
+ */
 function ignoreFirstOptionalSuspension(susp) {
     // TODO: Work out whether this will affect optional debug suspensions
     if (susp instanceof Sk.misceval.Suspension && susp.optional && susp.data.type !== "Sk.debug") {
@@ -608,19 +616,22 @@ PyDefUtils.setAttrsFromDict = function (obj, dict) {
 // Temporary, to get form init half-working enough to test layouts: Separate this out so it will work with
 // buildNativeClass
 PyDefUtils.mkNewDeserializedPreservingIdentityInner = (deserialize, newFn) => (cls, pyData, pyGlobals) => {
-    let pyClsname = new Sk.builtin.str(cls.anvil$serializableName);
-    // JS object in a Python dict - the outside world should never see it
+    const pyClsName = getPortableClassTypeName(cls);
+    if (!pyClsName) {
+        throw new Sk.builtin.RuntimeError("Object is not serializable");
+    }
+
     let jsCache;
     try {
-        jsCache = pyGlobals.mp$subscript(pyClsname);
+        jsCache = pyGlobals.mp$subscript(pyClsName);
         //console.log("Cache hit for", pyClsname.v, "in", Sk.builtin.repr(pyGlobals));
     } catch(e) {
-        //console.log("Cache miss for", pyClsname.v, "in", Sk.builtin.repr(pyGlobals));
-        jsCache = {}
-        pyGlobals.mp$ass_subscript(pyClsname, jsCache);
+        //console.log("Cache miss for", pyClsName.v, "in", Sk.builtin.repr(pyGlobals));
+        jsCache = {};
+        pyGlobals.mp$ass_subscript(pyClsName, jsCache);
         //console.log("New cache:", Sk.builtin.repr(pyGlobals));
     }
-    let myId = pyData.v[0].v;
+    const myId = pyData.v[0].v;
     let obj = jsCache[myId];
     if (!obj) {
         //console.log("Constructing a fresh", cls.tp$name);
@@ -645,22 +656,25 @@ PyDefUtils.mkNewDeserializedPreservingIdentity = function(deserialize, newFn) {
 
 // ClassicComponent ONLY
 PyDefUtils.mkSerializePreservingIdentityInner = (serialize) => (self, pyGlobals) => {
-    let lsk = self._anvil.$lastSerialKey;
-    if (lsk && lsk.pyGlobals === pyGlobals) { return new Sk.builtin.list([lsk.pyId]); }
+    const lsk = self._anvil.$lastSerialKey;
+    if (lsk && lsk.pyGlobals === pyGlobals) { return new pyList([lsk.pyId]); }
 
-    let clsname = self.constructor.anvil$serializableName;
-    let pyMaxKey = new Sk.builtin.str(clsname+"_max");
+    const pyClsName = getPortableClassTypeName(self);
+    if (!pyClsName) {
+        throw new pyRuntimeError("Object is not serializable");
+    }
+    const pyMaxKey = new pyStr(pyClsName+"_max");
     let pyMyId;
     try {
         pyMyId = pyGlobals.mp$subscript(pyMaxKey);
     } catch (e) {
-        pyMyId = new Sk.builtin.int_(0);
+        pyMyId = new pyInt(0);
     }
-    pyGlobals.mp$ass_subscript(pyMaxKey, new Sk.builtin.int_(pyMyId.v+1));
+    pyGlobals.mp$ass_subscript(pyMaxKey, new pyInt(pyMyId.v+1));
 
     self._anvil.$lastSerialKey = {pyId: pyMyId, pyGlobals: pyGlobals};
 
-    let val = serialize ? serialize(self) : (Sk.abstr.lookupSpecial(self, Sk.builtin.str.$dict) ?? new pyDict());
+    const val = serialize ? serialize(self) : (Sk.abstr.lookupSpecial(self, Sk.builtin.str.$dict) ?? new pyDict());
     return Sk.misceval.chain(val, (val) =>  new Sk.builtin.list([pyMyId, val]));
 };
 
@@ -686,7 +700,7 @@ PyDefUtils.getOuterClass = function getOuterClass({
     const spacing = ["none", "small", "medium", "large"];
 
     if (isTrue(align) && ["center", "right", "left"].includes(align.toString())) {
-        classList.push("align-" + align.toString());
+        classList.push(prefix + "align-" + align.toString());
     }
     if (isTrue(spacing_above) && spacing.includes(spacing_above.toString())) {
         classList.push("anvil-spacing-above-" + spacing_above.toString());
@@ -698,7 +712,7 @@ PyDefUtils.getOuterClass = function getOuterClass({
         classList.push("anvil-component-icon-present");
     }
     if (isTrue(icon_align)) {
-        classList.push(icon_align + "-icon");
+        classList.push(prefix + icon_align + "-icon");
     }
     if (visible !== undefined && !isTrue(visible)) {
         classList.push(prefix + "visible-false");
@@ -2186,7 +2200,10 @@ PyDefUtils.resumePrint = key => {
 
 PyDefUtils.pyTryFinally = pyTryFinally;
 
-module.exports = PyDefUtils;
+// module.exports = PyDefUtils;
+
+// ESM exports for migration
+export default PyDefUtils;
 
 // jQuery 3 migration.
 

@@ -1,6 +1,8 @@
 # Helpers for implementing anvil.server.
 # Used in uplink, downlink and pypy-sandbox.
+import builtins
 import importlib
+from types import MethodType
 
 import anvil
 import traceback
@@ -22,6 +24,7 @@ NEG_INFINITY = float("-inf")
 
 _value_types = {}
 _serialization_helpers = {} # {module_name: helper_fn}
+_server_side_methods = {} # {cls: str[]}
 
 class LiveObjectProxy(anvil.LiveObject):
 
@@ -436,6 +439,27 @@ class SerializeWithIdentity(object):
         return [my_id, data]
 
 
+def _make_server_method(name, method_name, method, cls):
+    # use function scope
+    import anvil.server
+
+    server_name = "anvil.server_side/" + name + "." + method_name
+    method._server_name = server_name
+
+    @anvil.server.callable(server_name, **method._kws)
+    def server_method_func(*args, **kwargs):
+        self_or_cls = args[0]
+        args = args[1:]
+        if method._is_class_method:
+            if not (isinstance(self_or_cls, type) and issubclass(self_or_cls, cls)):
+                msg = "Expected the first argument to be a class of type {} (got {}) when calling {}()"
+                raise TypeError(msg.format(cls.__name__, self_or_cls, method_name))
+        elif not isinstance(self_or_cls, cls):
+            msg = "'self' argument to method must be an instance of {} (got {}) when calling {}()"
+            raise TypeError(msg.format(cls.__name__, self_or_cls, method_name))
+        return getattr(self_or_cls, method_name)(*args, **kwargs)
+
+
 #!defFunction(anvil.server,%,[name])!2: {anvil$args: {name: "A unique name under which the class will be registered."}, $doc: "When applied to a class as a decorator, the class becomese available to be passed from server to client code."} ["portable_class"]
 def portable_class(cls, name=None):
     def register(cls, name):
@@ -447,6 +471,10 @@ def portable_class(cls, name=None):
             raise TypeError("The second argument to portable_class must be a str")
         _value_types[name] = cls
         cls.SERIALIZATION_INFO = (name, cls)
+
+        for method_name, method in _server_side_methods.get(cls, []):
+            _make_server_method(name, method_name, method, cls)
+
         return cls
 
     if name is None and isinstance(cls, str):
@@ -1201,11 +1229,24 @@ registrations = {}
 
 _registration_warning = "Warning: a callable with the name {!r} has already been registered (previously by {!r} now by {!r})."
 _warnings = []
+_ignore_prefixes = ["anvil.server_side/"] # ignore server_method duplicate registrations
+
 
 def _add_to_register(name, fn, ignore_warnings=False):
-    if not ignore_warnings and name in registrations and name not in _warnings:
+    if (
+        not ignore_warnings
+        and name in registrations
+        and name not in _warnings
+        and not any(name.startswith(prefix) for prefix in _ignore_prefixes)
+    ):
         prev = registrations[name]
-        print(_registration_warning.format(name, "%s.%s" % (prev.__module__, prev.__name__), "%s.%s" % (fn.__module__, fn.__name__)))
+        print(
+            _registration_warning.format(
+                name,
+                "%s.%s" % (prev.__module__, prev.__name__),
+                "%s.%s" % (fn.__module__, fn.__name__),
+            )
+        )
         _warnings.append(name)
     registrations[name] = fn
 
@@ -1700,24 +1741,62 @@ def plotly_serialization_helper(class_fullname):
 _serialization_helpers["plotly.graph_objs"] = plotly_serialization_helper
 
 
-class server_side_method:
+class server_method(object):
     """Decorator to wrap functions that should be executed on the server-side only"""
+
+    def __new__(cls, func=None, **kws):
+        self = object.__new__(cls)
+        self._kws = kws
+        if func is None:
+            return self.__call__
+        else:
+            return self
+
     def __init__(self, func):
-        if func is not None and not hasattr(func, "__get__"):
-            raise TypeError("@server_side must be called with a function")
+        functools.update_wrapper(self, func)
+        self._server_name = None
+        self._is_class_method = isinstance(func, classmethod)
+        if self._is_class_method:
+            func = func.__func__
+        if not builtins.callable(func):
+            raise TypeError("server_method must decorate a callable, got {}".format(type(func).__name__))
         self._func = func
 
-    def __set_name__(self, owner, name):
-        import anvil.server, functools
-        cname = "anvil.server_side/" + owner.__module__ + "." + owner.__name__ + "." + name
-        func = self._func
+    def __call__(self, func):
+        self.__init__(func)
+        return self
 
-        @anvil.server.callable(cname)
-        @functools.wraps(self._func)
-        def server_func(*args, **kwargs):
-            if not args or not isinstance(args[0], owner):
-                raise TypeError("'self' argument to method must be " + owner)
-            return func(*args, **kwargs)
+    def _check_register(self):
+        if self._server_name is None:
+            raise RuntimeError(
+                "server_method must be used as the top-level decorator on a method within a portable class"
+            )
+
+    def __set_name__(self, owner, name):
+        server_side_methods = _server_side_methods.setdefault(owner, [])
+        server_side_methods.append((name, self))
 
     def __get__(self, instance, owner):
-        return self._func.__get__(instance, owner)
+        self._check_register()
+        self_arg = None
+        if self._is_class_method:
+            self_arg = owner if owner is not None else type(instance)
+        elif instance is None:
+            return self
+        else:
+            self_arg = instance
+
+        if self_arg is None:
+            raise TypeError("Bad call to __get__")
+
+        return MethodType(self._func, self_arg)
+
+
+def get_dep_config(config_type):
+    import anvil.server
+    if config_type == "client":
+        return anvil.server.call("anvil.private.get_dep_client_config")
+    elif config_type == "server":
+        return anvil.server.call("anvil.private.get_dep_server_config")
+    else:
+        raise TypeError("Invalid config type: %s" % config_type)

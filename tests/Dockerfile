@@ -17,8 +17,9 @@ RUN curl -O https://raw.githubusercontent.com/technomancy/leiningen/stable/bin/l
     lein
 
 # Nodejs
-RUN curl -fsSL https://deb.nodesource.com/setup_16.x | bash -
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
 RUN apt-get install -y nodejs
+RUN npm install -g pnpm@latest-10
 
 #  embedded-traefik
 RUN git clone https://github.com/anvil-works/embedded-traefik.git && \

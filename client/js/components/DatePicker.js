@@ -1,8 +1,8 @@
 "use strict";
 
-var PyDefUtils = require("PyDefUtils");
-const { datetimeMod, tzMod } = require("@runtime/runner/py-util");
-const { getCssPrefix } = require("@runtime/runner/legacy-features");
+import PyDefUtils from "PyDefUtils";
+import { datetimeMod, tzMod } from "@runtime/runner/py-util";
+import { getCssPrefix } from "@runtime/runner/legacy-features";
 
 /*#
 id: datepicker
@@ -53,7 +53,7 @@ description: |
     explicitly set to the timezone of the user's browser.
 */
 
-module.exports = (pyModule) => {
+const DatePicker = (pyModule) => {
 
     const {isTrue} = Sk.misceval;
     const {checkString} = Sk.builtin;
@@ -372,5 +372,7 @@ module.exports = (pyModule) => {
     });
 
 };
+
+export default DatePicker;
 
 /*!defClass(anvil,DatePicker,Component)!*/

@@ -2,7 +2,9 @@
 // npm install -g lessc
 // lessc _alert.scss _alert.css
 
-@import "variables.scss";
+@use "sass:color";
+@use "sass:math";
+@use "variables.scss";
 
 
 //
@@ -10,30 +12,30 @@
 // --------------------------------------------------
 
 //## Define alert colors, border radius, and padding.
-$font-size-base:          14px;
+variables.$font-size-base:          14px;
 //** Unit-less `line-height` for use in components like buttons.
-$line-height-base:        1.428571429; // 20/14
-$line-height-computed:    floor(($font-size-base * $line-height-base)); // ~20px
+variables.$line-height-base:        1.428571429; // 20/14
+variables.$line-height-computed:    math.floor((variables.$font-size-base * variables.$line-height-base)); // ~20px
 
 $state-success-text:             #3c763d;
 $state-success-bg:               #dff0d8;
-$state-success-border:           darken(adjust-hue($state-success-bg, -10), 5%);
+$state-success-border:           color.adjust(color.adjust($state-success-bg, $hue: -10), $lightness: -5%);
 
 $state-info-text:                #31708f;
 $state-info-bg:                  #d9edf7;
-$state-info-border:              darken(adjust-hue($state-info-bg, -10), 7%);
+$state-info-border:              color.adjust(color.adjust($state-info-bg, $hue: -10), $lightness: -7%);
 
 $state-warning-text:             #8a6d3b;
 $state-warning-bg:               #fcf8e3;
-$state-warning-border:           darken(adjust-hue($state-warning-bg, -10), 5%);
+$state-warning-border:           color.adjust(color.adjust($state-warning-bg, $hue: -10), $lightness: -5%);
 
 $state-danger-text:              #a94442;
 $state-danger-bg:                #f2dede;
-$state-danger-border:            darken(adjust-hue($state-danger-bg, -10), 5%);
+$state-danger-border:            color.adjust(color.adjust($state-danger-bg, $hue: -10), $lightness: -5%);
 
 
 $alert-padding: 15px;
-$alert-border-radius: $border-radius-base;
+$alert-border-radius: variables.$border-radius-base;
 $alert-link-font-weight: bold;
 
 $alert-success-bg: $state-success-bg;
@@ -52,7 +54,7 @@ $alert-danger-bg: $state-danger-bg;
 $alert-danger-text: $state-danger-text;
 $alert-danger-border: $state-danger-border;
 
-$border-radius-base:        4px;
+variables.$border-radius-base:        4px;
 
 // Alerts
 
@@ -62,7 +64,7 @@ $border-radius-base:        4px;
     border-color: $border;
 
     hr {
-        border-top-color: darken($border, 5%);
+        border-top-color: color.adjust($border, $lightness: -5%);
     }
 
     // .alert-link {
@@ -74,9 +76,9 @@ $border-radius-base:        4px;
 // Base styles
 // -------------------------
 
-.#{$prefix}alert {
+.#{variables.$prefix}alert {
     padding: $alert-padding;
-    margin-bottom: $line-height-computed;
+    margin-bottom: variables.$line-height-computed;
     border: 1px solid transparent;
     border-radius: $alert-border-radius;
 
@@ -107,12 +109,12 @@ $border-radius-base:        4px;
 // Expand the right padding and account for the close button's positioning.
 
 // The misspelled .alert-dismissable was deprecated in 3.2.0.
-.#{$prefix}alert-dismissable,
-.#{$prefix}alert-dismissible {
+.#{variables.$prefix}alert-dismissable,
+.#{variables.$prefix}alert-dismissible {
     padding-right: ($alert-padding + 20);
 
     // Adjust close link position
-    .#{$prefix}close {
+    .#{variables.$prefix}close {
         position: relative;
         top: -2px;
         right: -21px;
@@ -124,18 +126,18 @@ $border-radius-base:        4px;
 //
 // Generate contextual modifier classes for colorizing the alert.
 
-.#{$prefix}alert-success {
+.#{variables.$prefix}alert-success {
     @include alert-variant($alert-success-bg, $alert-success-border, $alert-success-text);
 }
 
-.#{$prefix}alert-info {
+.#{variables.$prefix}alert-info {
     @include alert-variant($alert-info-bg, $alert-info-border, $alert-info-text);
 }
 
-.#{$prefix}alert-warning {
+.#{variables.$prefix}alert-warning {
     @include alert-variant($alert-warning-bg, $alert-warning-border, $alert-warning-text);
 }
 
-.#{$prefix}alert-danger {
+.#{variables.$prefix}alert-danger {
     @include alert-variant($alert-danger-bg, $alert-danger-border, $alert-danger-text);
 }

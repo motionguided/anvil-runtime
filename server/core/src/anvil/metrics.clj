@@ -1,13 +1,59 @@
 (ns anvil.metrics
-  (:require [anvil.runtime.conf :as conf]
-            [iapetos.core :as prometheus]
+  (:require [iapetos.core :as prometheus]
             [iapetos.standalone :as standalone]
             [iapetos.collector.jvm :as jvm]
-            [clojure.tools.logging :as log]))
+            [clojure.tools.logging :as log])
+  (:import (io.prometheus.client.exemplars ExemplarConfig)))
 
 ; Default buckets to use for request and query durations
 (def DEFAULT-BUCKETS [0.001 0.002 0.004 0.007 0.010 0.05 0.1 0.2 0.5 1 2 5 10 20 60 120])
 
+(ExemplarConfig/enableExemplars)
+
+;;; PATCH iapetos to produce latest prometheus text format (with support for exemplars)
+
+(ns iapetos.export)
+;; These are the original export functions, with the same default behaviour, but now accepting a format arg
+(defn write-text-format!
+  ([^java.io.Writer w registry] (write-text-format! TextFormat/CONTENT_TYPE_004 w registry))
+  ([format ^java.io.Writer w registry]
+   (TextFormat/writeFormat
+     format
+     w
+     (.metricFamilySamples ^CollectorRegistry (registry/raw registry)))))
+(defn text-format
+  ([registry] (text-format TextFormat/CONTENT_TYPE_004))
+  ([format registry]
+   (with-open [out (java.io.StringWriter.)]
+     (write-text-format! format out registry)
+     (str out))))
+
+(ns iapetos.collector.ring)
+;; This used to hard-code CONTENT_TYPE_004. Not anymore.
+(defn metrics-response
+  [registry]
+  {:status 200
+   :headers {"Content-Type" TextFormat/CONTENT_TYPE_OPENMETRICS_100}
+   :body    (iapetos.export/text-format TextFormat/CONTENT_TYPE_OPENMETRICS_100 registry)})
+(ns anvil.metrics
+  (:import (io.opentelemetry.api.trace Span)
+           (io.prometheus.client Histogram$Child Histogram$Timer)
+           (java.util Map)))
+
+;;; END PATCH
+
+;; Override hookable functions in iapetos
+
+(defprotocol TimeableExemplarCollector
+  (start-timer-with-exemplar [this ^Map exemplar]))
+
+(extend-type Histogram$Child
+  TimeableExemplarCollector
+  (start-timer-with-exemplar [this ^Map exemplar]
+    (let [^Histogram$Timer t (.startTimer ^Histogram$Child this)]
+      #(.observeDurationWithExemplar t exemplar))))
+
+;; If you update this with a hotfix, you will need to restart the prometheus server with (start-server!)
 (defonce registry (atom (-> (prometheus/collector-registry)
                             (jvm/initialize)
                             (prometheus/register
@@ -47,10 +93,26 @@
                               (prometheus/counter :api/runtime-session-deref-select-total)
                               (prometheus/counter :api/runtime-session-swap-total)
                               (prometheus/counter :api/runtime-session-update-total)
-                              (prometheus/counter :api/runtime-session-edn-roundtrip-total)))))
+                              (prometheus/counter :api/runtime-session-edn-roundtrip-total)
 
-(defn start-server [port]
-  (standalone/metrics-server @registry {:port port}))
+                              (prometheus/counter :api/downlink-builds-started-total)
+                              (prometheus/counter :api/downlink-builds-succeeded-total)
+                              (prometheus/counter :api/downlink-builds-failed-total)
+                              (prometheus/counter :api/downlink-calls-started-total)
+                              (prometheus/counter :api/downlink-calls-succeeded-total)
+                              (prometheus/counter :api/downlink-calls-failed-total)
+                              (prometheus/counter :api/background-tasks-started-total)
+                              (prometheus/counter :api/background-tasks-succeeded-total)
+                              (prometheus/counter :api/background-tasks-failed-total)))))
+
+(defonce server (atom nil))
+
+(defn stop-server! []
+  (swap! server #(when % (.close %))))
+
+(defn start-server! [port]
+  (stop-server!)
+  (reset! server (standalone/metrics-server @registry {:port port})))
 
 (defn inc! [metric & [labels amount]]
   (try
@@ -64,19 +126,23 @@
     (catch Exception e
       (log/error e "Failed to set metric"))))
 
-(defn observe! [metric value labels]
-  (try
-    (prometheus/observe @registry metric (or labels {}) value)
-    (catch Exception e
-      (log/error e "Failed to set metric"))))
+(defn observe!
+  ([metric value labels] (observe! metric value labels nil))
+  ([metric value labels [trace-id span-id :as exemplar]]
+   (try
+     (let [collector (iapetos.registry/get @registry metric (or labels {}))]
+       (if (and trace-id span-id)
+         (.observeWithExemplar collector value ^Map {"trace_id" trace-id "span_id" span-id})
+         (.observe collector value)))
+     (catch Exception e
+       (log/error e "Failed to set metric")))))
 
 (defn start-timer [metric & [labels]]
   (try
-    (prometheus/start-timer @registry metric labels)
+    (prometheus/start-timer @registry metric (or labels {}))
     (catch Exception e
       (log/error e "Failed to start metric timer")
       (fn []))))
 
 (defn register-metric [metric]
   (swap! registry prometheus/register metric))
-

@@ -1,6 +1,6 @@
 "use strict";
 
-var PyDefUtils = require("PyDefUtils");
+import PyDefUtils from "PyDefUtils";
 
 /*#
 id: timer
@@ -22,7 +22,7 @@ description: |
 
 */
 
-module.exports = (pyModule) => {
+const Timer = (pyModule) => {
 
     pyModule["Timer"] = PyDefUtils.mkComponentCls(pyModule, "Timer", {
         properties: [
@@ -102,6 +102,8 @@ module.exports = (pyModule) => {
         },
     });
 };
+
+export default Timer;
 
 /*!defClass(anvil,Timer,Component)!*/
 

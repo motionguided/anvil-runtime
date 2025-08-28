@@ -1,9 +1,9 @@
 "use strict";
 /* global google */
 
-var PyDefUtils = require("PyDefUtils");
-const { s_get_components } = require("@runtime/runner/py-util");
-const { pyFunc } = require("@Sk");
+import PyDefUtils from "PyDefUtils";
+import { s_get_components } from "@runtime/runner/py-util";
+import { pyFunc } from "@Sk";
 
 /*#
 id: googlemap
@@ -270,7 +270,7 @@ description: |
   ### The GoogleMap Component
 */
 
-module.exports = function(pyModule) {
+function GoogleMap(pyModule) {
 
     const {
         misceval: { isTrue, callsimArray: pyCall, callsimOrSuspendArray: pyCallOrSuspend, chain: chainOrSuspend },
@@ -3293,3 +3293,4 @@ module.exports = function(pyModule) {
 
 };
 
+export default GoogleMap;

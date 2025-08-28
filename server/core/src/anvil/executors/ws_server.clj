@@ -109,7 +109,7 @@
                                                :call-stack-id call-id))
                                     channel false nil)
                                   (catch Exception e
-                                    (log/error e "Error serialising uplink request")
+                                    (log/error e "Error serialising request")
                                     (swap! pending-responses dissoc call-id)
                                     (when return-path
                                       (dispatcher/respond! return-path {:error {:type "anvil.server.SerializationError" :message (str e)}}))))

@@ -4,6 +4,7 @@ import {
     buildNativeClass,
     chainOrSuspend,
     pyAttributeError,
+    pyCall,
     pyCallable,
     pyList,
     pyModule,
@@ -13,8 +14,8 @@ import {
     remapToJsOrWrap,
     toPy,
     tryCatchOrSuspend,
+    GetSetDef,
 } from "@Sk";
-import type { GetSetDef } from "@Sk/abstr/build_native_class";
 import {
     AnvilHookSpec,
     Component,
@@ -29,6 +30,7 @@ import {
     PropertyValueUpdates,
     Section,
     ToolboxSection,
+    UnsetPropertyValues,
     getPyParent,
     notifyComponentMounted,
     notifyComponentUnmounted,
@@ -39,7 +41,7 @@ import {
 import { Container, validateChild } from "@runtime/components/Container";
 import { initNativeSubclass, kwsToJsObj, s_add_event_handler, s_remove_event_handler } from "@runtime/runner/py-util";
 import { DropModeFlags } from "@runtime/runner/python-objects";
-import PyDefUtils, { asyncToPromise, pyCall } from "PyDefUtils";
+import PyDefUtils from "PyDefUtils";
 import { addJsModuleHook, customToolboxSections, jsCustomComponents } from "../common";
 import { JS_COMPONENT, PY_COMPONENT } from "./constants";
 import { asJsComponent, maybeSuspend, returnToPy, toPyComponent } from "./utils";
@@ -62,6 +64,7 @@ export interface JsComponent {
     _anvilSetupDom(): HTMLElement | Promise<HTMLElement>;
     _anvilDomElement: null | undefined | HTMLElement;
     _anvilGetInteractions?(): Interaction[];
+    _anvilGetUnsetPropertyValues?(): UnsetPropertyValues;
     _anvilUpdateDesignName?(name: string): void;
     _anvilSetSectionPropertyValues?(
         id: string,
@@ -107,17 +110,17 @@ export function getParent(self: JsComponent) {
 
 export function notifyMounted(self: JsComponent, isRoot = false) {
     const pyComponent = toPyComponent(self);
-    return asyncToPromise(() => notifyComponentMounted(pyComponent, isRoot));
+    return PyDefUtils.asyncToPromise(() => notifyComponentMounted(pyComponent, isRoot));
 }
 
 export function notifyUnmounted(self: JsComponent, isRoot = false) {
     const pyComponent = toPyComponent(self);
-    return asyncToPromise(() => notifyComponentUnmounted(pyComponent, isRoot));
+    return PyDefUtils.asyncToPromise(() => notifyComponentUnmounted(pyComponent, isRoot));
 }
 
 export function notifyVisibilityChange(self: JsComponent, visible: boolean) {
     const pyComponent = toPyComponent(self);
-    return asyncToPromise(() => notifyComponentVisibilityChange(pyComponent, visible));
+    return PyDefUtils.asyncToPromise(() => notifyComponentVisibilityChange(pyComponent, visible));
 }
 
 export function raiseAnvilEvent(self: JsComponent, eventName: string, eventArgs: { [arg: string]: any } = {}) {
@@ -125,11 +128,11 @@ export function raiseAnvilEvent(self: JsComponent, eventName: string, eventArgs:
     for (const [k, v] of Object.entries(eventArgs)) {
         pyKw.push(k, toPy(v));
     }
-    return asyncToPromise(() => raiseEventOrSuspend(toPyComponent(self), new pyStr(eventName), pyKw));
+    return PyDefUtils.asyncToPromise(() => raiseEventOrSuspend(toPyComponent(self), new pyStr(eventName), pyKw));
 }
 
 export function triggerWriteBack(component: JsComponent, property: string, value: any) {
-    return asyncToPromise(() =>
+    return PyDefUtils.asyncToPromise(() =>
         raiseWritebackEventOrSuspend(toPyComponent(component), new pyStr(property), toPy(value))
     );
 }
@@ -186,7 +189,7 @@ function setPropertyValuesOneByOne(this: JsComponent, updates: { [propName: stri
     return retrievedUpdates;
 }
 
-const createHookSpec = (spec: CustomComponentSpec): AnvilHookSpec<WrappedJsComponent> => {
+const createHookSpec = (cls: JsComponentConstructor, spec: CustomComponentSpec): AnvilHookSpec<WrappedJsComponent> => {
     const hooks: AnvilHookSpec<WrappedJsComponent> = {
         setupDom() {
             return maybeSuspend(this[JS_COMPONENT]._anvilSetupDom());
@@ -195,10 +198,10 @@ const createHookSpec = (spec: CustomComponentSpec): AnvilHookSpec<WrappedJsCompo
             return this[JS_COMPONENT]._anvilDomElement;
         },
         getProperties() {
-            return spec.properties ?? [];
+            return cls._anvilProperties ?? [];
         },
         getEvents() {
-            return spec.events ?? [];
+            return cls._anvilEvents ?? [];
         },
         updateDesignName(name) {
             return this[JS_COMPONENT]._anvilUpdateDesignName?.(name);
@@ -211,6 +214,9 @@ const createHookSpec = (spec: CustomComponentSpec): AnvilHookSpec<WrappedJsCompo
                 return this[JS_COMPONENT]._anvilGetDesignInfo?.()?.interactions ?? [];
             }
             return this[JS_COMPONENT]._anvilGetInteractions?.() ?? [];
+        },
+        getUnsetPropertyValues() {
+            return this[JS_COMPONENT]._anvilGetUnsetPropertyValues?.() ?? {};
         },
         getSections() {
             return this[JS_COMPONENT]._anvilGetSections?.();
@@ -367,12 +373,11 @@ function pyComponentFromClass(cls: JsComponentConstructor, spec: CustomComponent
                               const layoutProperties = kwsToJsObj(kws);
                               const jsContainer = this[JS_COMPONENT] as JsContainer;
 
-                              const doAddComponent = async () => {
-                                  const {
-                                      onRemove,
-                                      setVisibility,
-                                      isMounted = true,
-                                  } = await jsContainer._anvilAddComponent(asJsComponent(component), layoutProperties);
+                              const onAddComponent = ({
+                                  onRemove,
+                                  setVisibility,
+                                  isMounted = true,
+                              }: ComponentCleanup) => {
                                   // We could call super here
                                   // super().add_component(component, on_remove=toPy(onRemove), on_set_visibility=toPy(setVisibility));
                                   // this might return a suspension and that's fine
@@ -383,7 +388,15 @@ function pyComponentFromClass(cls: JsComponentConstructor, spec: CustomComponent
                                   });
                               };
 
-                              return returnToPy(doAddComponent());
+                              const maybeCleanup = jsContainer._anvilAddComponent(
+                                  asJsComponent(component),
+                                  layoutProperties
+                              );
+                              if (maybeCleanup instanceof Promise) {
+                                  return returnToPy(maybeCleanup.then(onAddComponent));
+                              } else {
+                                  return returnToPy(onAddComponent(maybeCleanup));
+                              }
                           },
                           $flags: { FastCall: true },
                       },
@@ -399,7 +412,7 @@ function pyComponentFromClass(cls: JsComponentConstructor, spec: CustomComponent
         },
         flags: { sk$klass: true },
         proto: {
-            anvil$hookSpec: createHookSpec(spec),
+            anvil$hookSpec: createHookSpec(cls, spec),
         },
     });
 

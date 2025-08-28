@@ -1,7 +1,13 @@
 import collections, json, os, psutil, random, signal, subprocess, sys, threading, time, traceback, platform
+from datetime import datetime
+
 from ws4py.client.threadedclient import WebSocketClient
 
+from anvil_downlink_util.tracing import trace, context, deserialise_parent_ctx, serialise_span_ctx, AnvilRpcExporter, get_tracer_provider
+trace.set_tracer_provider(get_tracer_provider("anvil-downlink-host", AnvilRpcExporter(lambda: connection and connection.authenticated, lambda msg: connection.send_with_header(msg))))
+tracer = trace.get_tracer(__name__)
 
+import anvil_downlink_host.memory as memory
 # Configuration
 
 TIMEOUT = int(os.environ.get("DOWNLINK_WORKER_TIMEOUT", "30"))
@@ -18,6 +24,7 @@ ENABLE_PDF_RENDER = os.environ.get("ENABLE_PDF_RENDER")
 PER_WORKER_SOFT_MEMORY_LIMIT = int(os.environ["PER_WORKER_SOFT_MEMORY_LIMIT_MB"])*1024*1024 \
                                     if "PER_WORKER_SOFT_MEMORY_LIMIT_MB" in os.environ else None
 IDLE_TIMEOUT_SECONDS = int(os.environ.get("IDLE_TIMEOUT_SECONDS","0"))
+MAX_WEBSOCKET_PAYLOAD = int(os.environ.get("MAX_WEBSOCKET_PAYLOAD", "16777216"))
 
 IS_WINDOWS = "Windows" in platform.system() or "CYGWIN" in platform.system()
 
@@ -32,9 +39,33 @@ workers_by_id = {}
 app_cache = collections.OrderedDict()
 
 
-def send_with_header(json_data, blob=None):
+def send_with_header(json_data, blob=None, on_oversize=None):
     """"Send data to the API router"""
-    connection.send_with_header(json_data, blob)
+    # print("<< ", str(json_data))
+    # if blob is not None:
+    #     print("<< [", len(blob), " bytes]")
+    connection.send_with_header(json_data, blob, on_oversize=on_oversize)
+
+
+def report_oversize_response(json_data):
+    """This function is used for reporting oversize responses up the websocket.
+       Pass as on_oversize= to send_with_header()"""
+    send_with_header({
+        "id": json_data.get("id"),
+        "error": {
+            "type": "anvil.server.SerializationError",
+            "message": "This function returned too much data - please use Media objects to transfer large amounts of data."
+        }
+    })
+
+
+def truncate_oversize_output(json_data):
+    output = json_data.get("output", "<output missing>")
+    send_with_header({
+        "id": json_data.get("id"),
+        "output": "[OVERSIZED OUTPUT TRUNCATED ({} chars)]: {}[...]".format(len(output), output[:256])
+    })
+
 
 # Host state
 
@@ -61,7 +92,9 @@ def maybe_quit_if_draining_and_done():
             def f():
                 time.sleep(draining_start_time + 10 - time.time())
                 maybe_quit_if_draining_and_done()
-            threading.Thread(target=f).start()
+            t = threading.Thread(target=f)
+            t.daemon = True
+            t.start()
         else:
             print("Drain complete. Exiting.")
             os._exit(0)
@@ -110,8 +143,12 @@ class Connection(WebSocketClient):
         self._last_keepalive_reply = time.time()
         self._last_activity = time.time()
         self._idle_timeout_timer = None
+        self._authenticated = False
+        self._authenticated_condition = threading.Condition()
 
-        threading.Timer(30, self.check_keepalives).start()
+        t = threading.Timer(30, self.check_keepalives)
+        t.daemon = True
+        t.start()
 
     def record_activity(self):
         self._last_activity = time.time()
@@ -120,7 +157,9 @@ class Connection(WebSocketClient):
         if self._idle_timeout_timer:
             self._idle_timeout_timer.cancel()
         if IDLE_TIMEOUT_SECONDS:
-            self._idle_timeout_timer = threading.Timer(IDLE_TIMEOUT_SECONDS, self.idle_timeout).start()
+            self._idle_timeout_timer = threading.Timer(IDLE_TIMEOUT_SECONDS, self.idle_timeout)
+            self._idle_timeout_timer.daemon = True
+            self._idle_timeout_timer.start()
 
     def idle_timeout(self):
         if is_idle() and self._last_activity < time.time() - IDLE_TIMEOUT_SECONDS:
@@ -134,7 +173,21 @@ class Connection(WebSocketClient):
             print("No keepalive reply or activity in %s seconds. Exiting." % KEEPALIVE_TIMEOUT)
             os._exit(1)
         else:
-            threading.Timer(30, self.check_keepalives).start()
+            t = threading.Timer(30, self.check_keepalives)
+            t.daemon = True
+            t.start()
+
+    @property
+    def authenticated(self):
+        return self._authenticated
+
+    def wait_for_authentication(self):
+        self._authenticated_condition.acquire()
+        try:
+            while not self._authenticated:
+                self._authenticated_condition.wait()
+        finally:
+            self._authenticated_condition.release()
 
     def opened(self):
         print("Anvil websocket open")
@@ -175,22 +228,35 @@ class Connection(WebSocketClient):
             raise
 
     def _received_message(self, message):
-
         if message.is_binary:
+            memory.count("MEDIA FROM PLATFORM SERVER (BYTES)", len(message.data))
+            memory.count("MEDIA FROM PLATFORM SERVER (CHUNKS)", 1)
+            # print(">>> [", len(message.data), " bytes]")
             self._send_next_bin(message.data)
 
         else:
             data = json.loads(message.data.decode())
+            memory.count("JSON FROM PLATFORM SERVER (BYTES)", len(message.data))
+            memory.count("JSON FROM PLATFORM SERVER (MESSAGES)", 1)
+            # print(">>> ", str(data))
 
             type = data["type"] if 'type' in data else None
             id = data["id"] if 'id' in data else None
             is_keepalive = id and id.startswith("downlink-keepalive")
+
+            ### TODO: Deserialise sts here.
 
             if not is_keepalive:
                 self.record_activity()
 
             if 'auth' in data:
                 print("Downlink authenticated OK")
+                self._authenticated_condition.acquire()
+                try:
+                    self._authenticated = True
+                    self._authenticated_condition.notify_all()
+                finally:
+                    self._authenticated_condition.release()
                 self.reset_idle_timer()
 
             elif 'output' in data:
@@ -214,7 +280,8 @@ class Connection(WebSocketClient):
                         data["app"] = cached_app
 
                 #print "Launching new worker for ID " + id
-                if draining_start_time and data.get("command", None) != "anvil.private.pdf.get_component":
+                if draining_start_time and data.get("command", None) != "anvil.private.pdf.get_component" and \
+                        time.time() > draining_start_time + 10:
                     self.send_with_header({"id": id, "error": {"type": "anvil.server.DownlinkDrainingError", "message": "New call routed to draining downlink"}})
                 else:
                     if data.get("command", None) == "anvil.private.pdf.do_print":
@@ -274,6 +341,10 @@ class Connection(WebSocketClient):
                 print("Resetting idle timeout to", data['timeout'])
 
             elif type == "CHUNK_HEADER":
+
+                if data.get('lastChunk'):
+                    memory.count("MEDIA FROM PLATFORM SERVER (OBJECTS)", 1)
+
                 if data['requestId'] in workers_by_id:
                     worker = workers_by_id[data['requestId']]
 
@@ -285,6 +356,11 @@ class Connection(WebSocketClient):
                 else:
                     print("Ignoring media for unknown request %s" % data['requestId'])
                     self._send_next_bin = lambda x: 0
+
+            elif type == "MEDIA_ERROR":
+                worker = workers_by_id.get(data['requestId'])
+                if worker is not None:
+                    worker.handle_inbound_message(data)
 
             elif (type is None or type == "PROVIDE_APP") and "id" in data:
                 if type == "PROVIDE_APP":
@@ -316,12 +392,25 @@ class Connection(WebSocketClient):
     def handle_debug_request(self, msg):
         raise NotImplemented
 
-    def send_with_header(self, json_data, blob=None):
-        if (not json_data.get("id","").startswith("downlink-keepalive")) and json_data.get("type") != "STATS":
+    def send_with_header(self, json_data, blob=None, on_oversize=None):
+        if (not json_data.get("id","").startswith("downlink-keepalive")) and json_data.get("type") not in ["STATS", "TRACE"]:
             self.record_activity()
+        bin = json.dumps(json_data)
+        if len(bin) >= MAX_WEBSOCKET_PAYLOAD:
+            if on_oversize:
+                on_oversize(json_data)
+                return
+            else:
+                print("Oversized payload, websocket will die shortly: " + bin[:128] + "...")
         with self._sending_lock:
-            WebSocketClient.send(self, json.dumps(json_data), False)
+            memory.count("JSON FROM WORKER (BYTES)", len(bin))
+            memory.count("JSON FROM WORKER (MESSAGES)", 1)
+            WebSocketClient.send(self, bin, False)
             if blob is not None:
+                memory.count("MEDIA FROM WORKER (BYTES)", len(blob))
+                memory.count("MEDIA FROM WORKER (CHUNKS)", 1)
+                if json_data.get("lastChunk"):
+                    memory.count("MEDIA FROM WORKER (OBJECTS)", 1)
                 WebSocketClient.send(self, blob, True)
 
 
@@ -355,8 +444,11 @@ class BaseWorker(object):
         self.outbound_ids = {} # Outbound ID -> inbound ID it came from
         self._media_tracking = {} # reqID -> (set([mediaId, mediaId, ]), finishedCallback)
         self.start_times = {}
+        self.parent_spans = {}
+        self.spans = {}
         self.proc_info = None
         self.task_info = task_info
+        self._dead_with_error = None # set this flag to reject all future attempts to add to req_ids
 
         self.initial_req_id = initial_msg['id']
 
@@ -366,23 +458,58 @@ class BaseWorker(object):
         outbound_id = outbound_msg['id']
         if outbound_id in workers_by_id:
             raise Exception("Duplicate ID: %s" % outbound_id)
+
         self.outbound_ids[outbound_msg['id']] = outbound_msg.get('originating-call', self.initial_req_id)
+        if 'span-ctx' in outbound_msg:
+            ctx = deserialise_parent_ctx(outbound_msg['span-ctx'])
+        else:
+            ctx = trace.set_span_in_context(self.spans.get(self.outbound_ids[outbound_msg['id']]))
+        span = tracer.start_span("Outbound call from downlink: {}".format(outbound_msg.get('command', outbound_msg.get('type'))), ctx)
+        self.spans[outbound_id] = span
+        outbound_msg['span-ctx'] = serialise_span_ctx(span)
         workers_by_id[outbound_id] = self
+        
+        # We don't need a callback when media transfer is complete, but we do want to track media we're sending,
+        # in case we time out and need to shoot down the transfer.
+        self.on_media_complete(outbound_msg, lambda: None)
 
     def record_outbound_call_complete(self, outbound_id):
         self.outbound_ids.pop(outbound_id, None)
         workers_by_id.pop(outbound_id, None)
+        s = self.spans.pop(outbound_id, None)
+        if s:
+            s.end()
         maybe_quit_if_draining_and_done()
 
     def record_inbound_call_started(self, inbound_msg):
         inbound_id = inbound_msg['id']
-        self.req_ids.add(inbound_id)
-        self.start_times[inbound_id] = time.time()
-        workers_by_id[inbound_id] = self
+
+        if self._dead_with_error:
+            sys.stderr.write("Late inbound call to dead worker: " + self._dead_with_error['message'] + " (IDs %s)\n" % inbound_id)
+            sys.stderr.flush()
+            send_with_header({'id': inbound_id, 'error': self._dead_with_error})
+        elif inbound_id in self.req_ids:
+            return # Otherwise worker initial_msg gets processed twice.
+        else:
+            self.req_ids.add(inbound_id)
+            self.start_times[inbound_id] = time.time()
+            
+            ctx = deserialise_parent_ctx(inbound_msg.get("span-ctx"))
+            span = tracer.start_span("Inbound downlink call: {}".format(inbound_msg.get('command')), ctx)
+            self.spans[inbound_id] = span
+            inbound_msg["span-ctx"] = serialise_span_ctx(span)
+            context.attach(trace.set_span_in_context(span))
+            
+            workers_by_id[inbound_id] = self
+            # Don't bother tracking media in inbound call args, because if we timeout or
+            # otherwise die, the incoming media will still happily arrive and be discarded.
 
     def record_inbound_call_complete(self, inbound_id):
         self.req_ids.discard(inbound_id)
         self.start_times.pop(inbound_id, None)
+        span = self.spans.pop(inbound_id, None)
+        if span:
+            span.end()
         workers_by_id.pop(inbound_id, None)
 
         if len(self.req_ids) == 0:
@@ -390,13 +517,29 @@ class BaseWorker(object):
 
         maybe_quit_if_draining_and_done()
 
-    def clean_up_all_outstanding_records(self):
+    def report_abandoned_media_transfers(self, id, error=None):
+        media_ids, _ = self._media_tracking.pop(id, ([], None))
+        if media_ids:
+            send_with_header({"type": "MEDIA_ERROR", "requestId": id, "mediaIds": list(media_ids), "cause": error})
+
+    def report_dead(self, error, print_info=False):
+        """Report the specified error for all future attempts to record inbound calls"""
+        self._dead_with_error = error
+        for i in self.req_ids:
+            if print_info:
+                sys.stderr.write(error['message'] + " (IDs %s)\n" % i)
+                sys.stderr.flush()
+            send_with_header({'id': i, 'error': error})
+
+    def clean_up_all_outstanding_records(self, err=None):
         for id in self.req_ids:
-            self._media_tracking.pop(id, None)
+            self.report_abandoned_media_transfers(id, err)
             workers_by_id.pop(id, None)
+            self.spans.pop(id, None)
         for id in self.outbound_ids:
-            self._media_tracking.pop(id, None)
+            self.report_abandoned_media_transfers(id, err)
             workers_by_id.pop(id, None)
+            self.spans.pop(id, None)
 
     def ensure_id_is_mine(self, req_id):
         if not (req_id in self.req_ids or req_id in self.outbound_ids):
@@ -448,7 +591,8 @@ class BaseWorker(object):
             "origin": "Server (Python)",
             "description": description,
             "start-time": float(self.start_times.get(response_msg['id'], 0)*1000),
-            "end-time": float(time.time()*1000)
+            "end-time": float(time.time()*1000),
+            "span-ctx": self.parent_spans.get(response_msg['id']),
         }
         if p is not None:
             response_msg["profile"]["children"] = [p]
@@ -504,6 +648,15 @@ def signal_drain(_signum=None, _frame=None):
         maybe_quit_if_draining_and_done()
 
 
+def signal_interrupt(_signum=None, _frame=None):
+    raise KeyboardInterrupt()
+
+
+def signal_terminate(_signum=None, _frame=None):
+    print("Downlink terminated")
+    os._exit(0)
+
+
 def report_stats():
     workers = set(workers_by_id.values())
     worker_stats = []
@@ -520,25 +673,57 @@ def report_stats():
     })
 
 
+def posix_utc_date_to_timestamp_nanos(s):
+    """
+    Python 3.10 is unable to parse the ISO 8601 timestamp produced by posix date.
+    This is the bare minimum needed to parse the output of `date -In -u`.
+    """
+    ts, rest = s.split(",", 1)
+    micros = rest[:6]
+    return int(1e9 * (datetime.strptime(ts + "." + micros, "%Y-%m-%dT%H:%M:%S.%f") - datetime(1970, 1, 1)).total_seconds())
+
 
 def run_downlink_host():
     global connection
 
-    url = os.environ.get("DOWNLINK_SERVER", "ws://localhost:3000/downlink")
-    key = os.environ.get("DOWNLINK_KEY", "ZeXiedeaceimahm1ePhaguvu5Ush9E")
-    os.environ['TZ'] = 'UTC'
+    startup_ctx_json = os.environ.get("TRACING_STARTUP_CONTEXT")
+    ctx = deserialise_parent_ctx(json.loads(startup_ctx_json)) if startup_ctx_json else None
 
-    for v in ["DOWNLINK_SERVER", "DOWNLINK_KEY"]:
-        if v in os.environ:
-            del os.environ[v]
+    copy_sources_timestamp_file = os.environ.get("COPY_SOURCES_TIMESTAMP_FILE")
+    if copy_sources_timestamp_file:
+        with open(copy_sources_timestamp_file, "r") as f:
+            start_time = posix_utc_date_to_timestamp_nanos(f.readline().strip())
+            end_time = posix_utc_date_to_timestamp_nanos(f.readline().strip())
 
-    connection = Connection(url, key)
+        tracer.start_span("Copy Sources", ctx, start_time=start_time).end(end_time)
 
-    connection.connect()
+    with tracer.start_as_current_span("Initialise Downlink Host", ctx):
+
+        url = os.environ.get("DOWNLINK_SERVER", "ws://localhost:3000/downlink")
+        key = os.environ.get("DOWNLINK_KEY", "ZeXiedeaceimahm1ePhaguvu5Ush9E")
+        os.environ['TZ'] = 'UTC'
+
+        for v in ["DOWNLINK_SERVER", "DOWNLINK_KEY"]:
+            if v in os.environ:
+                del os.environ[v]
+
+        with tracer.start_as_current_span("Connect"):
+            connection = Connection(url, key)
+            connection.connect()
+
+        with tracer.start_as_current_span("Authenticate"):
+            connection.wait_for_authentication()
+
+    AnvilRpcExporter.flush_all()
 
     if not IS_WINDOWS:
         try:
             signal.signal(signal.SIGUSR2, signal_drain)
+            # Also add default handlers so we can run as PID 1.
+            # This doesn't make us into a fully-compliant init process,
+            # but it does mean we shut down gracefully in a container.
+            signal.signal(signal.SIGINT,  signal_interrupt)
+            signal.signal(signal.SIGTERM, signal_terminate)
         except Exception as e:
             print("Failed to add signal handler: %s" % e)
 
@@ -557,7 +742,11 @@ def run_downlink_host():
                 "kwargs": {},
             })
             n += 1
+        except KeyboardInterrupt:
+            break
         except Exception as e:
             print("Keepalive failed. The downlink has probably disconnected.")
             print(e)
             os._exit(1)
+
+    print("Downlink shutting down")

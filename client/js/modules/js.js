@@ -1,6 +1,5 @@
-"use strict";
-
-const { anvilServerMod, anvilMod } = require("@runtime/runner/py-util");
+import { anvilServerMod, anvilMod } from "@runtime/runner/py-util";
+import PyDefUtils from "PyDefUtils";
 
 /*#
 id: js_module
@@ -36,9 +35,8 @@ const {
     },
 } = Sk;
 
-module.exports = function () {
+const js = () => {
     const pyMod = { __name__: new pyStr("js") };
-    var PyDefUtils = require("PyDefUtils");
 
     const call_js = PyDefUtils.callJs.bind(null, null);
     const dummyProxy = proxy({});
@@ -85,7 +83,8 @@ module.exports = function () {
         $flags: { OneArg: true },
     });
 
-    /*!defMethod(anvil.js.ProxyType instance)!2*/ "The type of a JavaScript object in when accessed in Python code"; "__init__";
+    /*!defMethod(anvil.js.ProxyType instance)!2*/ ("The type of a JavaScript object in when accessed in Python code");
+    ("__init__");
     /*!defClass(anvil.js,ProxyType)!*/
     pyMod.ProxyType = ProxyType;
 
@@ -312,3 +311,5 @@ module.exports = function () {
 
     return pyMod;
 };
+
+export default js;

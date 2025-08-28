@@ -1,5 +1,6 @@
 (ns anvil.runtime.tables.v2.util
-  (:require [clojure.tools.logging :as log]
+  (:require [anvil.core.tracing :as tracing]
+            [clojure.tools.logging :as log]
             [slingshot.slingshot :refer :all]
             [anvil.runtime.tables.util :as tables-util]
             [anvil.dispatcher.native-rpc-handlers.util :as rpc-util]
@@ -43,49 +44,56 @@
   ;; TODO cache this in the session, and invalidate on table change
   ([] (get-tables (tables-util/table-mapping-for-environment rpc-util/*environment*)))
   ([table-mapping]
-   (log/debug "Get tables for " table-mapping)
-   (into {::table-mapping table-mapping}
-         (for [{:keys [table_id columns client server] :as tbl} (tables-util/get-all-table-access-records table-mapping)]
-           (let [columns (for [[id column] columns]
-                           (-> (table-types/get-type-from-db-column column)
-                               (assoc :name (:name column)
-                                      :id (util/preserve-slashes id)
-                                      :ui-order (get-in column [:admin_ui :order]))))]
-             [table_id (-> (select-keys tbl [:name :python_name])
-                           (assoc :columns (into {} (for [col columns]
-                                                      [(:name col) col]))
-                                  :client (level-from-str client)
-                                  :server (level-from-str server)))])))))
+   (tracing/with-span ["get-tables" (-> (select-keys table-mapping [:table_mapping_id :app_id])
+                                        (assoc :internal true))]
+     (log/debug "Get tables for " table-mapping)
+     (into {::table-mapping table-mapping}
+           (for [{:keys [table_id columns client server] :as tbl} (tables-util/get-all-table-access-records table-mapping)]
+             (let [columns (for [[id column] columns]
+                             (-> (table-types/get-type-from-db-column column)
+                                 (assoc :name (:name column)
+                                        :id (util/preserve-slashes id)
+                                        :ui-order (get-in column [:admin_ui :order]))))]
+               [table_id (-> (select-keys tbl [:name :python_name])
+                             (assoc :columns (into {} (for [col columns]
+                                                        [(:name col) col]))
+                                    :client (level-from-str client)
+                                    :server (level-from-str server)))]))))))
 
 (defn typemap-from-column [col]
   (select-keys col [:type :table_id]))
 
-(defn get-ambient-level [tables table-id]
-  (let [level (get-in tables [table-id (if rpc-util/*client-request?* :client :server)])]
-    (if (and level (= :db-read-uplink (:origin rpc-util/*req*)))
-      (min level READ)
-      level)))
+(defn get-ambient-level
+  ([tables table-id] (get-ambient-level tables table-id false))
+  ([tables table-id treat-as-client-request?]
+   (let [is-client? (or treat-as-client-request? rpc-util/*client-request?*)
+         level (get-in tables [table-id (if is-client? :client :server)])]
+     (if (and level (= :db-read-uplink (:origin rpc-util/*req*)))
+       (min level READ)
+       level))))
 
-(defn has-ambient-level? [tables table-id required-level]
-  (let [my-level (get-ambient-level tables table-id)]
-    (and my-level (>= my-level required-level))))
+(defn has-ambient-level?
+  ([tables table-id required-level] (has-ambient-level? tables table-id required-level false))
+  ([tables table-id required-level treat-as-client-request?]
+   (let [my-level (get-ambient-level tables table-id treat-as-client-request?)]
+     (and my-level (>= my-level required-level)))))
 
 
 (defn- throw-permission-denied!
-  ([] (throw-permission-denied! nil nil nil nil))
-  ([tables table-id required-level row?]
+  ([] (throw-permission-denied! nil nil nil nil false))
+  ([tables table-id required-level row? treat-as-client-request?]
    (let [name (get-in tables [table-id :name])
          name (if name (str " table '" name "'") " this table")]
      (throw+ {:anvil/server-error (str "Cannot " (condp = required-level WRITE "write to" READ "read from" "access") (when row? " row from") name " from "
-                                       (if rpc-util/*client-request?* "client" "server") " code.")
+                                       (if (or treat-as-client-request? rpc-util/*client-request?*) "client" "server") " code.")
               :type               "anvil.server.PermissionDenied"
               :docId              "data_tables_permissions"
               :docLinkTitle       "Learn about Data Table permissions"}))))
 
-(defn- ensure-access! [tables table-id perm required-level row?]
+(defn- ensure-access! [tables table-id perm required-level row? treat-as-client-request?]
   (when-not (or (>= (perm-to-access perm) required-level)
-                (has-ambient-level? tables table-id required-level))
-    (throw-permission-denied! tables table-id required-level row?)))
+                (has-ambient-level? tables table-id required-level treat-as-client-request?))
+    (throw-permission-denied! tables table-id required-level row? treat-as-client-request?)))
 
 (defn generate-column-id []
   (.replace (random/base64 8) \/ \_))
@@ -106,12 +114,14 @@
         [_ _ & unwrapped] (types/unwrap-capability cap scope)]
     unwrapped))
 
-(defn unwrap-cap-with-perm! [tables cap type required-level]
-  (when (and (= type :table) (nil? cap))
-    (throw-permission-denied!))
-  (let [[{:keys [id perm]} :as unwrapped] (unwrap-cap cap type)]
-    (ensure-access! tables id perm required-level (= type :row))
-    unwrapped))
+(defn unwrap-cap-with-perm!
+  ([tables cap type required-level] (unwrap-cap-with-perm! tables cap type required-level false))
+  ([tables cap type required-level treat-as-client-request?]
+   (when (and (= type :table) (nil? cap))
+     (throw-permission-denied!))
+   (let [[{:keys [id perm]} :as unwrapped] (unwrap-cap cap type)]
+     (ensure-access! tables id perm required-level (= type :row) treat-as-client-request?)
+     unwrapped)))
 
 (defn encode-view-spec [view-spec]
   (if (contains? view-spec :restrict)

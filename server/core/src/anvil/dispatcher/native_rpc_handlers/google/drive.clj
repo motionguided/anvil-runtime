@@ -42,19 +42,12 @@
 (defn multi-whitelist!-and-lazy-media [items creds wl-access]
   (doall (for [i items] (whitelist!-and-lazy-media creds wl-access i))))
 
-(defonce apps-needing-drive-scope (atom {}))
-
 (defn get-app-file [_kwargs id]
   (let [wl-access (get-whitelist-access ::file id "google-delegated")
         _ (ensure-whitelist-access-ok wl-access false "read this app file")
 
-        resp (request {:url    (str "https://www.googleapis.com/drive/v2/files/" id)
-                       :method :get} "google-delegated")
-        {:keys [scope] :as _access-token} (get-in @*session-state* [:google :delegation-access-token])
-        scopes (set (.split scope " "))
-        has-drive? (contains? scopes "https://www.googleapis.com/auth/drive")]
-    (when has-drive?
-      (swap! apps-needing-drive-scope assoc *app-id* (select-keys *app-info* [:name :user_id :user_organisation])))
+        resp (request {:url    (str "https://www.googleapis.com/drive/v2/files/" id "?supportsAllDrives=true")
+                       :method :get} "google-delegated")]
     (whitelist!-and-lazy-media "google-delegated" wl-access resp)))
 
 (defn get-user-files [_kwargs]
@@ -85,8 +78,10 @@
 
     (ensure-whitelist-access-ok wl-access false "list files")
 
-    (let [resp (request {:url    (str "https://www.googleapis.com/drive/v2/files/"
+    (let [resp (request {:url    (str "https://www.googleapis.com/drive/v2/files"
                                       "?maxResults=" (or (:max_results kwargs) 100)
+                                      "&supportsAllDrives=true"
+                                      "&includeItemsFromAllDrives=true"
                                       "&pageToken=" (if (:page_token kwargs)
                                                       (codec/url-encode (:page_token kwargs))
                                                       "")
@@ -112,7 +107,7 @@
   (let [wl-access (get-whitelist-access ::file parent-id creds)
         _ (ensure-whitelist-access-ok wl-access false)
 
-        resp    (request {:url    (str "https://www.googleapis.com/drive/v2/files/" id)
+        resp    (request {:url    (str "https://www.googleapis.com/drive/v2/files/" id "?supportsAllDrives=true")
                           :method :get} creds)
 
         parents (set (map #(get % "id") (get resp "parents")))]
@@ -127,7 +122,7 @@
   ;; TODO: Work out whether we really want to allow app files to be deleted.
   (ensure-whitelist-ok ::file id creds true "trash file")
 
-  (let [resp (request {:url    (str "https://www.googleapis.com/drive/v2/files/" id "/trash")
+  (let [resp (request {:url    (str "https://www.googleapis.com/drive/v2/files/" id "/trash?supportsAllDrives=true")
                        :method :post} creds)]
 
     ;; TODO: Respond to this properly, with success or fail
@@ -137,7 +132,7 @@
   ;; TODO: Work out whether we really want to allow app files to be deleted.
   (ensure-whitelist-ok ::file id creds true "delete file")
 
-  (let [resp (request {:url    (str "https://www.googleapis.com/drive/v2/files/" id)
+  (let [resp (request {:url    (str "https://www.googleapis.com/drive/v2/files/" id "?supportsAllDrives=true")
                        :method :delete} creds)]
 
     ;; TODO: Respond to this properly, with success or fail
@@ -154,7 +149,7 @@
                   "title"    (str title)
                   "parents"  [{"id" parent-id}]}
 
-        resp (request {:url     "https://www.googleapis.com/drive/v2/files"
+        resp (request {:url     "https://www.googleapis.com/drive/v2/files?supportsAllDrives=true"
                        :method  :post
                        :headers {"Content-Type" "application/json"}
                        :body    (util/write-json-str metadata)} creds)]
@@ -189,7 +184,7 @@
                                               (blocking-hacks/?->InputStream *req* content)
                                               (ByteArrayInputStream. (.getBytes "\n--eo1bee8ahChoh3sahjah9laViv0AetiebahH7ahc--"))]))
 
-        resp (request {:url     "https://www.googleapis.com/upload/drive/v2/files?uploadType=multipart"
+        resp (request {:url     "https://www.googleapis.com/upload/drive/v2/files?uploadType=multipart&supportsAllDrives=true"
                        :method  :post
                        :headers {"Content-Type" "multipart/related; boundary=\"eo1bee8ahChoh3sahjah9laViv0AetiebahH7ahc\""}
                        :body    body} creds)]
@@ -206,10 +201,10 @@
         sanitized-metadata {"title" (:title metadata)}      ;; Cannot set parents in metadata any more. Must use query string
 
         qs (if new-parent
-             (str "?addParents=" new-parent "&removeParents=" old-parent)
+             (str "&addParents=" new-parent "&removeParents=" old-parent)
              "")
 
-        resp (request {:url     (str "https://www.googleapis.com/drive/v2/files/" id qs)
+        resp (request {:url     (str "https://www.googleapis.com/drive/v2/files/" id "?supportsAllDrives=true" qs)
                        :method  :put
                        :headers {"Content-Type" "application/json"}
                        :body    (util/write-json-str sanitized-metadata)} creds)]
@@ -239,7 +234,7 @@
   (ensure-whitelist-ok ::file id creds true "upload file content")
 
   (let [mime-type (.getContentType content)
-        resp (request {:url     (str "https://www.googleapis.com/upload/drive/v2/files/" id "?uploadType=media")
+        resp (request {:url     (str "https://www.googleapis.com/upload/drive/v2/files/" id "?uploadType=media&supportsAllDrives=true")
                        :method  :put
                        :headers {"Content-Type" mime-type}
                        :body    (blocking-hacks/?->InputStream *req* content)} creds)]
@@ -289,7 +284,7 @@
     ;; we just need to check that the *app* is allowed to see it)
     (if (get-whitelist-access ::file id creds)
       (mk-http-media (add-credentials
-                       {:url (str "https://www.googleapis.com/drive/v2/files/" id "?alt=media")}
+                       {:url (str "https://www.googleapis.com/drive/v2/files/" id "?alt=media&supportsAllDrives=true")}
                        creds))
       (throw+ {:anvil/server-error "You do not have permission to access this file"}))
 

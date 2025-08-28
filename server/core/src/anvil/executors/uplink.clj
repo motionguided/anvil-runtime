@@ -74,7 +74,7 @@
                   return-path (dispatcher/return-path-with-closing-span return-path tracing-span)
 
                   {:keys [call-context request return-path]} (ws-calls/stateful-request-to-serialisable-request request return-path profiling-info)
-                  request (assoc request :serialised-tracing-span nil)] ;; TODO: Work out how to serialise the tracing span here, so the uplink can add spans of its own. See dispatch-uplink-call!
+                  request (assoc request :span-ctx (tracing/span->map tracing-span))]
 
               (send-request! call-context {:type "CALL"} request return-path)))
 
@@ -125,6 +125,9 @@
 
       (on-close channel
                 (fn [why]
+                  (when (realized? ds)
+                    (serialisation/interruptOutstandingMedia @ds))
+
                   (clear-uplink-registrations! @connection-cookie @my-fn-registrations)
 
                   (worker-pool/set-task-info! :websocket ::close)
@@ -231,6 +234,9 @@
 
                               (= (:type raw-data) "CHUNK_HEADER")
                               (serialisation/processBlobHeader @ds raw-data)
+
+                              (= (:type raw-data) "MEDIA_ERROR")
+                              (serialisation/processMediaError @ds raw-data)
 
                               ;; Command (request from uplink, ie remote-initiated RPC)
                               (= (:type raw-data) "CALL")

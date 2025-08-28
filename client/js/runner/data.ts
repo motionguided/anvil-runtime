@@ -156,14 +156,48 @@ export interface RuntimeOptions {
     legacy_features?: LegacyFeatures;
 }
 
+export type DependencyConfigType = "string" | "number" | "boolean" | "text[]" | "enum";
+
+export interface DependencyPropBase {
+    default_value?: any;
+    description?: string;
+    title?: string;
+    hidden?: boolean;
+    [arbitraryKeys: string]: any;
+}
+
+interface DependencyPropString extends DependencyPropBase {
+    type: "string";
+}
+
+interface DependencyPropNumber extends DependencyPropBase {
+    type: "number";
+}
+
+interface DependencyPropBoolean extends DependencyPropBase {
+    type: "boolean";
+}
+
+interface DependencyPropTextArray extends DependencyPropBase {
+    type: "text[]";
+}
+
+interface DependencyPropEnum extends DependencyPropBase {
+    type: "enum";
+    options: string[];
+}
+
+export type DependencyPropConfig =
+    | DependencyPropString
+    | DependencyPropNumber
+    | DependencyPropBoolean
+    | DependencyPropTextArray
+    | DependencyPropEnum;
+
 export interface DepConfigSchemaDef {
     // the app yaml defines default_value and type
     // the dep yaml defines value
-    [key: string]: {
-        default_value?: any;
-        type?: any;
-        [arbitraryKeys: string]: any;
-    };
+    [key: string]: DependencyPropConfig;
 }
 
 export interface DepConfigSchema {
@@ -171,6 +205,8 @@ export interface DepConfigSchema {
     server?: DepConfigSchemaDef;
 }
 
+// todo: this really should be somehow inside DepConfigResolved so you know the keys will be just these
+export type DepConfigKeys = "client" | "server";
 export interface DepConfigResolved {
     client: { [key: string]: any };
     server: { [key: string]: any };
@@ -185,7 +221,7 @@ export interface DependencyYaml {
     toolbox?: {
         sections?: ToolboxSection[];
         hide_classic_components?: boolean;
-    }
+    };
     layouts?: CustomLayoutYaml[];
     config_schema?: DepConfigSchema;
     config: DepConfigResolved;
@@ -217,7 +253,7 @@ export interface AppConfig {
     toolbox?: {
         sections?: ToolboxSection[];
         hide_classic_components?: boolean;
-    }
+    };
     layouts?: CustomLayoutYaml[];
     dependency_ids: { [logicalDepId: string]: string };
     // Temporary, while we're fixing some broken apps that worked by accident
@@ -237,6 +273,7 @@ interface ServerParams {
     consoleMessage?: string;
     ideOrigin?: string;
     runtimeVersion: number;
+    instrumentFormEvents?: boolean;
     [param: string]: any;
 }
 
@@ -286,6 +323,7 @@ export type SetDataParams = Pick<Data, "app" | "appId" | "appOrigin" | "appStart
 export function temporaryHackSetupData(d: Partial<Data>) {
     data = d as Data;
     window.debugAnvilData = data;
+    window.anvilAppMainPackage = data.appPackage;
 }
 
 export function setData({ app, appId, appOrigin, ...serverParams }: SetDataParams) {
@@ -356,10 +394,10 @@ export const topLevelForms = {
 
 const EmptyObject = {};
 
-export const getClientConfig = (packageName?: string) => {
+export const getClientConfig = (packageName?: string | null) => {
     // we're calling this too early from javascript - return undefined and the js can handle it how it likes
     if (!data) return;
-    if (packageName === undefined || packageName === data.appPackage) {
+    if (packageName == null || packageName === data.appPackage) {
         return data.app.config?.client ?? EmptyObject;
     } else {
         for (const dep of Object.values(data.app?.dependency_code ?? {})) {

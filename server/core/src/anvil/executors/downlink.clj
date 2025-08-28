@@ -1,7 +1,9 @@
 (ns anvil.executors.downlink
   (:use org.httpkit.server
         [slingshot.slingshot :only [throw+ try+]])
-  (:require [digest]
+  (:require [anvil.core.sloppy-timeouts :as sloppy-timeouts]
+            [anvil.metrics :as metrics]
+            [digest]
             [anvil.util :as util]
             [anvil.runtime.ws-util :as ws-util]
             [anvil.dispatcher.serialisation.core :as serialisation]
@@ -14,7 +16,8 @@
             [anvil.core.worker-pool :as worker-pool]
             [anvil.executors.ws-server :as ws-server]
             [anvil.runtime.app-data :as app-data]
-            [anvil.core.tracing :as tracing]))
+            [anvil.core.tracing :as tracing])
+  (:import (io.opentelemetry.api.trace Span)))
 
 
 (clj-logging-config.log4j/set-logger! :level :info)
@@ -40,14 +43,17 @@
         (sanitise)
         (update :dependency_code update-vals sanitise))))
 
-
 (def WS-SERVER-PARAMS {:link-name "Downlink",
                        :bg-impl-id :downlink,
                        :disconnection-error "anvil.server.RuntimeUnavailableError"})
 
 (defn launch-bg-task! [connection get-debugger-coordinates {:keys [app-info environment] :as request} return-path]
   ;; This could be called in contexts where we don't have the app:
-  (let [get-app (fn []
+  (metrics/inc! :api/background-tasks-started-total)
+  (let [return-path (dispatcher/wrap-return-path return-path
+                      #(metrics/inc! :api/background-tasks-succeeded-total)
+                      #(metrics/inc! :api/background-tasks-failed-total))
+        get-app (fn []
                   (log/trace "Getting app for" app-info "env:" environment)
                   (or (:app request)
                       (:content (app-data/get-app app-info (app-data/get-version-spec-for-environment environment)))))]
@@ -63,25 +69,29 @@
              (let [profiling-info {:origin      "Server (Downlink executor)"
                                    :description (format "Downlink execute (%s)" func)}
 
-                   tracing-span (tracing/start-span (str "Downlink call: " (:short (dispatcher/request-task-description request))) {:internal true} tracing-span)
+                   tracing-span ^Span (tracing/start-span (str "Downlink call: " (:short (dispatcher/request-task-description request))) {:internal true} tracing-span)
                    request (assoc request :tracing-span tracing-span)
-                   return-path (dispatcher/return-path-with-closing-span return-path tracing-span)
+                   return-path (-> return-path
+                                   (dispatcher/return-path-with-closing-span tracing-span)
+                                   (dispatcher/wrap-return-path
+                                     #(metrics/inc! :api/downlink-calls-succeeded-total)
+                                     #(metrics/inc! :api/downlink-calls-failed-total)))
 
                    {:keys [call-context request return-path]} (ws-calls/stateful-request-to-serialisable-request request return-path profiling-info)
-
-                   request (assoc request :serialised-tracing-span nil) ;; TODO: Work out how to serialise the tracing span here, so the downlink can add spans of its own. See dispatch-downlink-call!
 
                    call-id (ws-server/gen-call-id request)
                    call-context (assoc call-context
                                   ::get-app (constantly app)
                                   ::get-debugger-coordinates (when get-debugger-coordinates
                                                                (partial get-debugger-coordinates environment)))]
-
+               (metrics/inc! :api/downlink-calls-started-total)
                (send-request! call-context {:type "CALL" :id call-id} request return-path)))
 
     :bg-fn (partial launch-bg-task! connection get-debugger-coordinates)}))
 
 (ws-server/setup-bg-task-impl! WS-SERVER-PARAMS)
+
+(def WS-INACTIVITY-TIMEOUT-SECS 30)
 
 (defn handle-incoming-ws [request]
   (ws-util/with-opening-channel
@@ -101,16 +111,29 @@
                                   (close channel)))
 
           close-with-error-message! (fn [error-msg]
-                                      (send! channel (util/write-json-str {:error error-msg}))
-                                      (close channel))
+                                      (log/error error-msg)
+                                      (try
+                                        (send! channel (util/write-json-str {:error error-msg}))
+                                        (close channel)
+                                        (catch Exception e
+                                          (log/info "Could not send error message to channel (likely already closed):" (.getMessage e)))))
+
+          ; Close the websocket if activity stops. This indicates disconnection if the TCP link isn't closed properly
+          inactivity-timeout (sloppy-timeouts/mk-SloppyTimeout 10 (fn on-timeout [_]
+                                                                    (when-not (is-closed?)
+                                                                      (close-with-error-message! "Websocket timed out due to inactivity"))))
 
           connection {:send-request! send-request!, ::ws-server/send-raw! #(send! channel %), ::tag-channel! (partial ws-util/tag-channel! channel) ::disconnect-on-idle! disconnect-on-idle! ::get-pending-responses get-pending-responses ::close-with-error-message! close-with-error-message!}]
+
+      (sloppy-timeouts/set-timeout inactivity-timeout nil WS-INACTIVITY-TIMEOUT-SECS)
 
       (on-close channel
                 (fn [why]
                   (worker-pool/set-task-info! :websocket ::close)
                   (log/info "Downlink client disconnected:" (pr-str why) (pr-str @spec))
+                  (sloppy-timeouts/clear-timeout inactivity-timeout nil)
 
+                  (serialisation/interruptOutstandingMedia ds)
                   ;; Remove closing channel from list of registered downlinks
                   (unregister-downlink! @registration-cookie)
 
@@ -129,6 +152,7 @@
                     (worker-pool/set-task-info! :websocket ::receive)
                     (log/trace "Downlink got data: " json-or-binary)
                     (try
+                      (sloppy-timeouts/set-timeout inactivity-timeout nil WS-INACTIVITY-TIMEOUT-SECS)
                       (if-not (string? json-or-binary)
                         (serialisation/processBlob ds json-or-binary)
 
@@ -187,6 +211,12 @@
                             ;; Statistics
                             (= (:type raw-data) "STATS")
                             (report-downlink-stats @registration-cookie (:data raw-data))
+
+                            (= (:type raw-data) "MEDIA_ERROR")
+                            (serialisation/processMediaError ds raw-data)
+
+                            (= (:type raw-data) "SPANS")
+                            (tracing/ingest-spans! {:spans (:data raw-data)} "Downlink")
 
                             ;; Response from downlink
                             (or (contains? raw-data :response) (contains? raw-data :error))

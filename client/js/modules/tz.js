@@ -1,18 +1,6 @@
-"use strict";
-
-const {
-    pyCall,
-    pyTypeError,
-    pyFunc,
-    toPy,
-    toJs,
-    pyStr,
-    pyNone,
-    lookupSpecial,
-    checkOneArg,
-    buildPyClass,
-} = require("../@Sk");
-const { datetimeMod, kwsToObj } = require("../runner/py-util");
+import { buildPyClass, checkOneArg, lookupSpecial, pyCall, pyFunc, pyNone, pyStr, pyTypeError, toJs, toPy } from "@Sk";
+import PyDefUtils from "PyDefUtils";
+import { datetimeMod, kwsToObj } from "../runner/py-util";
 
 /*#
 id: tz_module
@@ -25,9 +13,8 @@ description: |
 
 */
 
-module.exports = function () {
+const tz = () => {
     const pyMod = { __name__: new pyStr("anvil.tz") };
-    const PyDefUtils = require("PyDefUtils");
 
     // N.B. We assume that none of this suspends.
     const timedelta = datetimeMod.timedelta;
@@ -95,3 +82,5 @@ module.exports = function () {
 
     return pyMod;
 };
+
+export default tz;

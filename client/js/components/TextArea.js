@@ -1,7 +1,7 @@
 "use strict";
 
-const { getCssPrefix } = require("@runtime/runner/legacy-features");
-var PyDefUtils = require("PyDefUtils");
+import { getCssPrefix } from "@runtime/runner/legacy-features";
+import PyDefUtils from "PyDefUtils";
 
 /*#
 id: textarea
@@ -13,16 +13,14 @@ description: |
   c = TextArea(text="Some editable text\nacross multiple lines")
   ```
 
-  Text areas are text boxes that can contain multiple lines of text
-
-  ![Screenshot](img/screenshots/textarea.png)
+  Text areas are text boxes that can contain multiple lines of text.
 
   Set a TextArea to have focus by calling its `focus()` method. Select all its text with the `select()` method.
 
   The `text` property of a TextArea can trigger write-back of data bindings. This occurs before the `lost_focus` event.
 */
 
-module.exports = (pyModule) => {
+const TextArea = (pyModule) => {
     const { isTrue } = Sk.misceval;
 
     pyModule["TextArea"] = PyDefUtils.mkComponentCls(pyModule, "TextArea", {
@@ -207,7 +205,9 @@ module.exports = (pyModule) => {
         taDummy.remove();
     }
 
-}; 
+};
+
+export default TextArea;
 
 /*!defClass(anvil,TextArea,Component)!*/
 

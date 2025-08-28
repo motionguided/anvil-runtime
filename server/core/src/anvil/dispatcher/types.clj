@@ -21,7 +21,7 @@
   (getInputStream [this] "Get the data of this Media object (as an InputStream)"))
 
 (defprotocol ChunkedStream
-  (consume [this f] "Call (f chunk-idx last-chunk data) for each byte-array chunk in this stream"))
+  (consume [this on-chunk on-error] "Call (on-chunk chunk-idx last-chunk data) for each byte-array chunk in this stream, or (on-error error) in case of an error"))
 
 (defrecord LazyMedia [manager key id mime-type length name]
   MediaDescriptor
@@ -157,8 +157,8 @@
     (getContentType [_this] mime-type)
     (getName [_this] name)
     ChunkedStream
-    (consume [_this f]
-      (f 0 true content))))
+    (consume [_this on-chunk _on-error]
+      (on-chunk 0 true content))))
 
 (def ^:private secret (delay (if (.exists (File. ^String conf/live-object-mac-path))
                                (slurp conf/live-object-mac-path)

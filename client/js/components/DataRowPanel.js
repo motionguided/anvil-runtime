@@ -1,10 +1,10 @@
 "use strict";
 
-var PyDefUtils = require("PyDefUtils");
-const {pyNone, pyStr, pyBool, pyCall} = require("@Sk");
-const { validateChild } = require("./Container");
-const { getCssPrefix } = require("@runtime/runner/legacy-features");
-const { notifyVisibilityChange } = require("./Component");
+import PyDefUtils from "PyDefUtils";
+import { pyNone } from "@Sk";
+import { validateChild } from "./Container";
+import { getCssPrefix } from "@runtime/runner/legacy-features";
+import { notifyVisibilityChange } from "./Component";
 
 /*#
 id: datarowpanel
@@ -19,7 +19,7 @@ description: |
 
   For more information, see the [documentation for the `DataGrid` component](#datagrid), or our [`DataGrid` Tutorials](/blog/data-grids)
 */
-module.exports = function(pyModule) {
+const DataRowPanel = (pyModule) => {
 
     const { isTrue } = Sk.misceval;
     const str_add_component = new Sk.builtin.str("add_component");
@@ -502,3 +502,5 @@ module.exports = function(pyModule) {
  *  - Methods: add_component
  *
  */
+
+export default DataRowPanel;

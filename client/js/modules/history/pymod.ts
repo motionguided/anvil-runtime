@@ -54,13 +54,13 @@ type HistoryState = {
 const POP_STATE_EVENT = "popstate";
 
 // because anvil the origin is not always the base path e.g. in debug mode
-const baseHref = document.querySelector("base")?.getAttribute("href") ?? "";
-let basePath: string | undefined;
-if (baseHref) {
-    basePath = new URL(baseHref).pathname;
-    if (basePath !== "/" && basePath.endsWith("/")) {
-        basePath = basePath.slice(0, -1);
-    }
+const baseEl = document.querySelector("base") as HTMLBaseElement | null;
+// Use the resolved base href if present; otherwise fall back to the document base URI
+const baseHref = baseEl?.href || document.baseURI;
+// Derive a normalized base path from the base URL (directory path), trimming trailing slash (except for '/')
+let basePath = new URL(".", baseHref).pathname;
+if (basePath !== "/" && basePath.endsWith("/")) {
+    basePath = basePath.slice(0, -1);
 }
 
 enum Action {
@@ -92,7 +92,7 @@ function cleanLocationParts(parts: LocationParts) {
     }
     if (search == null) {
         search = "";
-    }else if (search && !search.startsWith("?")) {
+    } else if (search && !search.startsWith("?")) {
         search = "?" + search;
     }
     if (hash == null) {
@@ -146,7 +146,7 @@ export const Location: LocationConstructor = buildNativeClass("anvil.history.Loc
         },
         tp$init() {
             // pass
-        }
+        },
     },
     methods: {
         get_url: {
@@ -483,11 +483,9 @@ function createHashLocation(globalHistory: Window["history"]) {
 
 function createHashHref(to: Location) {
     let href = "";
-    if (baseHref) {
-        const url = window.location.href;
-        const hashIndex = url.indexOf("#");
-        href = hashIndex === -1 ? url : url.slice(0, hashIndex);
-    }
+    const url = window.location.href;
+    const hashIndex = url.indexOf("#");
+    href = hashIndex === -1 ? url : url.slice(0, hashIndex);
     const hash = to.toString();
     return href + "#" + hash;
 }

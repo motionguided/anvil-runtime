@@ -2,9 +2,16 @@ import anvil.server
 from anvil.server import Capability
 
 from .._base_classes import SearchIterator as BaseSearchIterator
+from . import _batcher
 from ._constants import CAP_KEY, SERVER_PREFIX, SHARED_DATA_KEY
 from ._row import Row
-from ._utils import check_serialized, init_spec_rows, init_view_data, merge_row_data, validate_cap
+from ._utils import (
+    check_serialized,
+    init_spec_rows,
+    init_view_data,
+    merge_row_data,
+    validate_cap,
+)
 
 PREFIX = SERVER_PREFIX + "search."
 
@@ -40,7 +47,9 @@ class PartialSearchIter(object):
         if self._stop is not None:
             self._stop -= num_row_ids
 
-        row_ids, cap_next, table_data = anvil.server.call(PREFIX + "next_page", self._cap_next)
+        row_ids, cap_next, table_data = _batcher.flush_and_call(
+            PREFIX + "next_page", self._cap_next
+        )
 
         self._reset(row_ids, cap_next, table_data)
         return self.__next__()
@@ -54,7 +63,9 @@ class PartialSearchIter(object):
         except IndexError:
             return self._iter_next_page()
         self._idx += self._step
-        return Row._create_from_trusted(self._view_key, self._table_id, row_id, self._table_data)
+        return Row._anvil_create_from_trusted(
+            self._view_key, self._table_id, row_id, self._table_data
+        )
 
     next = __next__
 
@@ -89,7 +100,9 @@ class SearchIterator(BaseSearchIterator):
         return self
 
     def _fill_data(self):
-        self._row_ids, self._cap_next, self._table_data = anvil.server.call(PREFIX + "next_page", self._cap)
+        self._row_ids, self._cap_next, self._table_data = _batcher.flush_and_call(
+            PREFIX + "next_page", self._cap
+        )
 
     def _clear_cache(self):
         self._row_ids = self._table_data = self._cap_next = None
@@ -106,7 +119,11 @@ class SearchIterator(BaseSearchIterator):
         new_data = {CAP_KEY: row_data[-1]}
         iter_row_data = iter(row_data)
 
-        new_data = {str(i): next(iter_row_data) for i, is_cached in enumerate(cache_spec) if is_cached}
+        new_data = {
+            str(i): next(iter_row_data)
+            for i, is_cached in enumerate(cache_spec)
+            if is_cached
+        }
         cap = next(iter_row_data)
         assert type(cap is Capability)
         new_data[CAP_KEY] = cap
@@ -135,7 +152,10 @@ class SearchIterator(BaseSearchIterator):
             g_view_data = init_view_data(view_key, g_table_data)
             l_view_data = self._table_data[view_key]
 
-            l_table_spec, l_table_rows = l_view_data["spec"], l_view_data.get("rows", {})
+            l_table_spec, l_table_rows = (
+                l_view_data["spec"],
+                l_view_data.get("rows", {}),
+            )
             g_table_spec, g_table_rows = init_spec_rows(g_view_data, l_table_spec)
 
             g_cache_spec = g_table_spec["cache"]
@@ -148,13 +168,17 @@ class SearchIterator(BaseSearchIterator):
                     # this is rare - we've consumed the search iterator and now we're serializing
                     # or we created this row from shared serialization data and we're now reserializing
                     row = row_data
-                    row._merge_and_reduce(g_table_data, local_data)
+                    row._anvil_merge_and_reduce(g_table_data, local_data)
                     continue
 
                 g_row_data = g_table_rows.get(row_id, [])
                 g_is_compact = cache_match and type(g_row_data) is list
-                row_data = self._make_row_data(row_data, l_table_spec, compact=g_is_compact)
-                merge_row_data(row_id, row_data, g_table_rows, g_table_spec, l_cache_spec)
+                row_data = self._make_row_data(
+                    row_data, l_table_spec, compact=g_is_compact
+                )
+                merge_row_data(
+                    row_id, row_data, g_table_rows, g_table_spec, l_cache_spec
+                )
 
     def __serialize__(self, info):
         table_data, local_data = info.shared_data(SHARED_DATA_KEY)
@@ -174,7 +198,7 @@ class SearchIterator(BaseSearchIterator):
     def __len__(self):
         if self._cap_next is None and self._row_ids is not None:
             return len(self._row_ids)
-        return anvil.server.call(PREFIX + "get_length", self._cap)
+        return _batcher.flush_and_call(PREFIX + "get_length", self._cap)
 
     def __hash__(self):
         return hash((self._table_id, self._cap))
@@ -194,10 +218,12 @@ class SearchIterator(BaseSearchIterator):
         self._clear_cache()
 
     def to_csv(self, escape_for_excel=False):
-        return anvil.server.call(PREFIX + "to_csv", self._cap, escape_for_excel=escape_for_excel)
+        return _batcher.flush_and_call(
+            PREFIX + "to_csv", self._cap, escape_for_excel=escape_for_excel
+        )
 
     def delete_all_rows(self):
-        result = anvil.server.call(PREFIX + "delete_all", self._cap)
+        result = _batcher.flush_and_call(PREFIX + "delete_all", self._cap)
         self._clear_cache()
         return result
 
@@ -206,7 +232,9 @@ class SearchIterator(BaseSearchIterator):
             self._fill_data()
 
         if isinstance(idx, slice):
-            slice_ = slice(as_slice_idx(idx.start), as_slice_idx(idx.stop), as_slice_idx(idx.step))
+            slice_ = slice(
+                as_slice_idx(idx.start), as_slice_idx(idx.stop), as_slice_idx(idx.step)
+            )
             return self._make_partial_iterator(slice_)
         else:
             slice_ = slice(as_idx(idx), None)

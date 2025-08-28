@@ -121,6 +121,15 @@ class page_size(object):
     __hash__, __eq__ = _hash_wrapper("rows")
 
 
+#!defFunction(anvil.tables.query,_,*only_cols,**linked_cols)!2:
+# {
+#   $doc: "Control which columns are loaded from a table search to speed up queries by only fetching the data you need.",
+#   anvil$helpLink: "/docs/data-tables/accelerated-tables#explicit-cache-control",
+#   anvil$args: {
+#     only_cols: "Column names to fetch from the table. Example: fetch_only('email', group=q.fetch_only('name'))",
+#     linked_cols: "Linked columns to fetch, specified as keyword arguments. Each value must be another fetch_only() object."
+#   }
+# }["fetch_only"]
 @portable_class("anvil.tables.fetch_only")
 class fetch_only(object):
     def __init__(self, *only_cols, **linked_cols):
@@ -152,6 +161,14 @@ class fetch_only(object):
         return other.spec == self.spec
 
 
+#!defFunction(anvil.tables.query,_,*cols)!2:
+# {
+#   $doc: "Control which columns are accessible from a view, restricting access to specific columns.",
+#   anvil$helpLink: "/docs/data-tables/accelerated-tables#column-restricted-views",
+#   anvil$args: {
+#     cols: "Column names to make accessible in the view. Example: only_cols('email', 'enabled')"
+#   }
+# }["only_cols"]
 @portable_class
 class only_cols(object):
     def __init__(self, *cols):

@@ -3,7 +3,7 @@
 import { getCssPrefix, getInlineStyles } from "@runtime/runner/legacy-features";
 import { setHandled } from "./events";
 import { getUnsetSpacing, setElementMargin, setElementPadding } from "@runtime/runner/components-in-js/public-api/property-utils";
-var PyDefUtils = require("PyDefUtils");
+import PyDefUtils from "PyDefUtils";
 
 /*#
 id: radiobutton
@@ -42,12 +42,10 @@ description: |
   the `value` property of the currently selected RadioButton in that group. If there are multiple RadioButtons in the
   same group with the same `value`, then you can't tell them apart this way!)
 
-  ![Screenshot](img/screenshots/radiobuttons.png)
-
 */
 
 
-module.exports = (pyModule) => {
+const RadioButton = (pyModule) => {
     const {isTrue} = Sk.misceval;
     const inlineStyle = getInlineStyles("radio");
 
@@ -203,6 +201,8 @@ module.exports = (pyModule) => {
     });
 
 };
+
+export default RadioButton;
 
 /*!defClass(anvil,RadioButton,Component)!*/
 

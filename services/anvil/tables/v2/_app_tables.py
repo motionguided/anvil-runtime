@@ -51,7 +51,7 @@ class AppTables(BaseAppTables):
         raise AttributeError("app_tables is read-only")
 
     def __dir__(self):
-        return object.__dir__(self) + list(_fill_cache().keys())
+        return list(_fill_cache().keys()) + object.__dir__(self)
     
     def __iter__(self):
         return AppTableIterator()

@@ -6,7 +6,7 @@ from .config import get_client_config
 def _to_user_row(user):
     if type(user) is list:
         from anvil.tables.v2._row import Row
-        user = Row._create_from_trusted(*user)
+        user = Row._anvil_create_from_trusted(*user)
     return user
 
 def _to_row_ref(user):
@@ -137,7 +137,7 @@ else:
             raise Exception("New user signup is not enabled")
 
         import anvil.facebook.auth
-        if anvil.facbeook.auth.login(additional_scopes):
+        if anvil.facebook.auth.login(additional_scopes):
             u = anvil.server.call("anvil.private.users.signup_with_facebook", remember=remember)
             return _to_user_row(u)
 

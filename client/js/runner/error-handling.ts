@@ -10,7 +10,7 @@ import {
     toJs,
 } from "../@Sk";
 import Modal from "../modules/modal";
-import * as PyDefUtils from "../PyDefUtils";
+import PyDefUtils from "PyDefUtils";
 import { logEvent } from "./logging";
 
 // overrides the dom-lib OnErrorEventHandlerNonNull
@@ -142,7 +142,7 @@ function _isExternalError(err: any): err is pyExternalError {
 }
 
 function handlePythonError(pyErrorObj: pyBaseException & { _anvil?: any }) {
-    const args = toJs(pyErrorObj.args);
+    const args = toJs(pyErrorObj.args) as any[];
     const msg = args[0];
     const errorObj = pyErrorObj._anvil?.errorObj;
     const traceback = pyErrorObj.traceback;

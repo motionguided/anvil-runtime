@@ -21,7 +21,8 @@
   (:import (anvil.dispatcher.types DateTime)
            (java.sql Timestamp)
            (java.util Date)
-           (java.io StringWriter)))
+           (java.io StringWriter)
+           (org.postgresql.util PSQLException)))
 
 ;; Background task managers available on this node
 ;; maps impl-name -> {:get-state, kill!}
@@ -44,7 +45,7 @@
   (jdbc/execute! util/db ["DELETE FROM background_tasks WHERE completion_status IS NOT NULL AND start_time < to_timestamp(?)" (/ started-before 1000.0)]))
 
 (defonce create-background-task-record
-         (fn [_environment impl task-name session-id]
+         (fn [_launch-request impl task-name session-id]
            (when-let [oldest-to-keep ^Timestamp (:start_time (last (jdbc/query util/db ["SELECT start_time FROM background_tasks WHERE completion_status IS NOT NULL ORDER BY start_time DESC LIMIT 1000"])))]
              (clean-all-finished-tasks-older-than! (.getTime oldest-to-keep)))
            (let [new-id (str/lower-case (random/base32 25))]
@@ -66,9 +67,11 @@
 (def set-background-task-hooks! (util/hook-setter #{do-kill-task! do-get-task-state create-background-task-record list-background-tasks
                                                     load-background-task-in-environment get-environment-for-background-task}))
 
-(defn load-background-task-by-id [db-c id]
-  (first (->> (jdbc/query db-c ["SELECT * FROM background_tasks WHERE id = ?" id])
-              (map map->BackgroundTask))))
+(defn load-background-task-by-id
+  ([id] (load-background-task-by-id util/db id))
+  ([db-c id]
+   (first (->> (jdbc/query db-c ["SELECT * FROM background_tasks WHERE id = ?" id])
+               (map map->BackgroundTask)))))
 
 
 (defn present-background-task [bt]
@@ -162,18 +165,26 @@
                            (when error {:error error}))
         status (cond
                  (#{:threw :mia :killed} error?) (name error?)
-                 error? "threw"
-                 :else "completed")]
+                 (or error? error) "threw"
+                 :else "completed")
 
-    (when (and (first (jdbc/query util/db [(str "UPDATE background_tasks SET completion_status = ?::background_task_status, final_state = ?::jsonb"
-                                                (when (not= error? :mia) ", last_seen_alive=NOW()")
-                                                " WHERE id = ? AND completion_status IS NULL RETURNING *")
-                                           status serialised-state id]))
-               session)
+        update-task-row! (fn [status final-state]
+                           (first (jdbc/query util/db [(str "UPDATE background_tasks SET completion_status = ?::background_task_status, final_state = ?::jsonb"
+                                                            (when (not= error? :mia) ", last_seen_alive=NOW()")
+                                                            " WHERE id = ? AND completion_status IS NULL RETURNING *")
+                                                       status final-state id])))
+
+        updated-row (try
+                      (update-task-row! status serialised-state)
+                      (catch PSQLException e
+                        ;; TODO: We could test the task-state and return value one by one here to work out which failed, if we cared enough.
+                        (update-task-row! "threw" {:error {:message (str "The state or return value could not be saved: " (.getMessage e))}})))]
+
+    (when (and updated-row session)
 
       ;; The session might already have ended - if this is the error coming in after a kill, for example.
       ;; So only record this event if we were the one to set the task's completion status
-      (app-log/record-event! session nil "background_task_ended" nil {:status status}))))
+      (app-log/record-event! session nil "background_task_ended" nil {:status (:status updated-row)}))))
 
 
 ;; When we send Media into a background task, we need to ensure that it has all arrived
@@ -345,17 +356,18 @@
 ;; A utility function, for use in pypy and local wrapper. It sets up a new background task record,
 ;; a new session, and a return path pointing to that task. The return value of the function is (optionally) used
 ;; as the final state.
-(defn setup-background-task-context [{:keys [app-id app-origin environment scheduled-task-id tracing-span] {func :func} :call :as request} impl cleanup-fn]
-  (let [new-session (sessions/new-session-with-state {:app-id      app-id
-                                                      :app-origin  app-origin
-                                                      :client      {:type :background_task}
-                                                      :environment environment}
+(defn setup-background-task-context [{:keys [app-id app-origin environment scheduled-task-id tracing-span bg-task-watch-key] {func :func} :call :as request} impl cleanup-fn]
+  (let [new-session (sessions/new-session-with-state (cond-> {:app-id      app-id
+                                                              :app-origin  app-origin
+                                                              :client      {:type :background_task}
+                                                              :environment environment}
+                                                             bg-task-watch-key (assoc :bg-task-watch-key bg-task-watch-key))
                                                      (merge {:func func}
                                                             (when scheduled-task-id
                                                               {:scheduled_task scheduled-task-id})))
         log-ctx (merge {:app-session new-session}
                        (select-keys request [:app-id :environment]))
-        task (create-background-task-record environment impl func (sessions/get-id new-session))
+        task (create-background-task-record request impl func (sessions/get-id new-session))
         _ (swap! new-session assoc-in [:client :background-task-id] (:id task))
 
         return-path {:update!  (fn [{:keys [output debuggers]}]

@@ -1,4 +1,4 @@
-import type { pyDict, pyNewableType, pyObject } from "@Sk";
+import type { pyCallable, pyDict, pyNewableType, pyObject } from "@Sk";
 import {
     chainOrSuspend,
     isTrue,
@@ -27,6 +27,7 @@ import {
 import {
     anvilMod,
     jsObjToKws,
+    reportError,
     s_add_component,
     s_add_event_handler,
     s_layout,
@@ -70,6 +71,12 @@ export const getAndCheckNextCreationStack = (formName: string, depAppId: string 
     return yamlStack;
 };
 
+// Instrumentation hook
+let wrapFormEventHandler: (handler: pyCallable) => pyCallable = (x) => x;
+export const setInstrumentationHooks = (wfeh?: (pyCallable) => pyCallable) => {
+    wrapFormEventHandler = wfeh ?? wrapFormEventHandler;
+};
+
 export function mkInvalidComponent(message: string) {
     return pyCall<Component>(anvilMod.InvalidComponent, [], ["text", new pyStr(message)]);
 }
@@ -103,7 +110,24 @@ export function removeEventHandlers(
     }
 }
 
-// TODO: This code will need some sort of loop prevention
+/** We can't use the wrapped function else we break equality of event handlers
+ * but we can use a proxy, this way they are python equal */
+function ensureWrappedFunctionEquality(wrappedFn, originalFn) {
+    if (wrappedFn === originalFn) return wrappedFn;
+    return new Proxy(originalFn, {
+        get(target, prop) {
+            if (prop === "tp$call") {
+                // call the wrapped version of tp$call
+                return wrappedFn.tp$call;
+            }
+            return target[prop];
+        },
+        set(target, prop, value) {
+            target[prop] = value;
+            return true;
+        },
+    });
+}
 
 export function addEventHandlers(
     pyComponent: Component,
@@ -118,8 +142,9 @@ export function addEventHandlers(
 
         const pyHandler = Sk.generic.getAttr.call(pyForm, new pyStr(methodName)) as pyObject; // use object.__getattribute__ for performance
         if (Sk.builtin.checkCallable(pyHandler)) {
+            const wrappedPyHandler = ensureWrappedFunctionEquality(wrapFormEventHandler(pyHandler), pyHandler);
             try {
-                pyCall(pyAddEventHandler, [new pyStr(eventName), pyHandler]);
+                pyCall(pyAddEventHandler, [new pyStr(eventName), wrappedPyHandler]);
             } catch (e) {
                 // bad yaml event name - ignore ValueError
                 // TODO this should be a more specific exception type
@@ -224,7 +249,7 @@ function createComponents(
                         "\n",
                         strError(exception)
                     );
-                    window.onerror(null, null, null, null, exception);
+                    reportError(exception);
                     return mkInvalidComponent(`Error instantiating "${yaml?.name}": ${strError(exception)}`);
                 }
             ),
@@ -282,7 +307,7 @@ function createComponents(
                             strError(exception)
                         );
                         // This exception is almost certainly user code, so we should produce helpful stack traces here
-                        window.onerror(null, null, null, null, exception);
+                        reportError(exception);
                         return mkInvalidComponent(`Error setting up component "${yaml?.name}": ${strError(exception)}`);
                     }
                 ),
@@ -465,7 +490,15 @@ export function addFormComponentsToLayout(formYaml: FormYaml, pyForm: Component,
                 pySlot = pySlots.mp$subscript(new pyStr(slotName));
             } catch (e: any) {
                 if (e instanceof Sk.builtin.KeyError) {
-                    reportError(new pyException(`Could not add components to slot '${slotName}': Slot not found`));
+                    reportError(
+                        new pyException(
+                            `Could not add component(s) ${components
+                                .map((c) => `'${c.name}'`)
+                                .join(", ")} to slot '${slotName}' in ${formYaml.class_name}: Slot not found in ${
+                                pyLayout.tp$name
+                            } layout. It may have been renamed or deleted.`
+                        )
+                    );
                     orphanedComponents.push(...components.map(({ name }) => name));
                     // Carry on, because there may just be one bad slot.
                     return;

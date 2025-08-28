@@ -8,19 +8,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="never"> <!-- Yes, this is "legacy", but Safari and Edge don't support 'no-referrer' yet -->
 
-  <meta name="og:title" content="{{app-name}}">
-  <meta name="title" content="{{app-name}}">
+  <meta name="og:title" content="{{meta-og-title}}">
+  <meta name="title" content="{{meta-title}}">
   <meta name="og:type" content="website">
   <meta name="og:url" content="{{canonical-url}}">
-  <meta name="og:image" content="{{social-image}}">
+  <meta name="og:image" content="{{meta-og-image}}">
   <!--<xmeta name="og:image:width" content="400">-->
   <!--<xmeta name="og:image:height" content="400">-->
   <!--<xmeta name="og:site_name" content="Anvil">-->
-  <meta name="og:description" content="{{description}}">
-  <meta name="description" content="{{description}}">
+  <meta name="og:description" content="{{meta-og-description}}">
+  <meta name="description" content="{{meta-description}}">
 
-
-  <title>{{app-title}}</title>
+  <title>{{meta-title}}</title>
 
   <!-- <link rel="stylesheet" href="{{app-origin}}/_/static/runtime/css/bootstrap.css?buildTime=0" crossorigin/> -->
   <!-- <link rel="stylesheet" href="{{app-origin}}/_/static/runtime/css/bootstrap-theme.min.css?buildTime=0" crossorigin/> -->
@@ -30,9 +29,8 @@
   </style>
   {{legacy-bootstrap-css}}
   {{legacy-classnames}}
-  <link rel="stylesheet" href="{{app-origin}}/_/static/runtime/dist/runner-v3.min.css?buildTime=0" crossorigin/>
+  <link rel="stylesheet" href="{{app-origin}}/_/static/runtime/dist/static/css/runner-v3.min.css?buildTime=0" crossorigin/>
   <link rel="stylesheet" href="{{app-origin}}/_/static/runtime/css/daterangepicker.min.css?buildTime=0" crossorigin/>
-  <!-- <link rel="stylesheet" href="{{app-origin}}/_/static/runtime/node_modules/animate.css/animate.min.css?buildTime=0" crossorigin/> -->
 
   <link rel="stylesheet" href="{{app-origin}}/_/static/runtime/css/font-awesome.min.css?buildTime=0" crossorigin/>
 
@@ -40,20 +38,21 @@
   <link rel="icon" href="{{favicon}}">
   <link rel="manifest" href="{{manifest-url}}?buildTime=0">
   <link rel="apple-touch-icon" href="{{social-image}}">
-  <meta name="apple-mobile-web-app-title" content="{{app-title}}">
-  <meta name="application-name" content="{{app-title}}">
+  <meta name="apple-mobile-web-app-title" content="{{app-name}}">
+  <meta name="application-name" content="{{app-name}}">
   <meta name="msapplication-TileColor" content="#2b5797">
   <meta name="msapplication-TileImage" content="{{ms-tile-image}}">
   <meta name="theme-color" content="{{theme-color}}">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
+  {{meta-fields}}
 
   <style>{{shim-css}}</style>
   <style>{{root-vars}}</style>
   {{theme-css}}
 
-  <script src="{{app-origin}}/_/static/runtime/node_modules/jquery/dist/jquery.min.js?buildTime=0" crossorigin></script>
-  <script src="{{app-origin}}/_/static/runtime/node_modules/jquery-migrate/dist/jquery-migrate.min.js?buildTime=0" crossorigin></script>
+  <script src="{{app-origin}}/_/static/runtime/js/lib/jquery.min.js?buildTime=0" crossorigin></script>
+  <script src="{{app-origin}}/_/static/runtime/js/lib/jquery-migrate.min.js?buildTime=0" crossorigin></script>
 
   {{head-html}}
 </head>
@@ -100,25 +99,25 @@
   }());
 </script>
 
-<script src="{{app-origin}}/_/static/runtime/node_modules/html5-boilerplate/dist/js/vendor/modernizr-3.8.0.min.js?buildTime=0" crossorigin></script>
+<script src="{{app-origin}}/_/static/runtime/js/lib/modernizr-3.8.0.min.js?buildTime=0" crossorigin></script>
 
-<!--<script src="{{app-origin}}/_/static/runtime/node_modules/bootstrap/dist/js/bootstrap.min.js?buildTime=0" crossorigin></script>-->
+<!--<script src="{{app-origin}}/_/static/runtime/js/lib/bootstrap.min.js?buildTime=0" crossorigin></script>-->
 {{legacy-bootstrap-js}}
-<script src="{{app-origin}}/_/static/runtime/node_modules/moment/min/moment.min.js?buildTime=0" crossorigin></script>
-<script src="{{app-origin}}/_/static/runtime/node_modules/moment-timezone/builds/moment-timezone-with-data-2012-2022.min.js?buildTime=0" crossorigin></script>
+<script src="{{app-origin}}/_/static/runtime/js/lib/moment.min.js?buildTime=0" crossorigin></script>
+<script src="{{app-origin}}/_/static/runtime/js/lib/moment-timezone-with-data-10-year-range.min.js?buildTime=0" crossorigin></script>
 <script src="{{app-origin}}/_/static/runtime/js/lib/daterangepicker.min.js?buildTime=0" crossorigin></script>
 <script src="{{app-origin}}/_/static/runtime/js/lib/b64.js?buildTime=0" crossorigin></script>
 <script src="{{app-origin}}/_/static/runtime/js/lib/bootstrap-notify.min.js?buildTime=0" crossorigin></script>
 
-<script src="{{app-origin}}/_/static/runtime/node_modules/js-yaml/dist/js-yaml.min.js?buildTime=0" crossorigin></script>
+<script src="{{app-origin}}/_/static/runtime/js/lib/js-yaml.min.js?buildTime=0" crossorigin></script>
 
-<!--   <script src="{{app-origin}}/_/static/runtime/node_modules/core-js-bundle/minified.js?buildTime=0" crossorigin></script>
- -->
+
 
 <script src="{{app-origin}}/_/static/runtime/js/lib/skulpt.min.js?buildTime=0" crossorigin></script>
 <script src="{{app-origin}}/_/static/runtime/js/lib/skulpt-stdlib.js?buildTime=0" crossorigin></script>
 
-<script src="{{app-origin}}/_/static/runtime/dist/runner2.bundle.js?buildTime=0" crossorigin></script>
+<script src="{{app-origin}}/_/static/runtime/dist/static/js/runner2.bundle.js?buildTime=0" crossorigin></script>
+
 
 {{extra-snippets}}
 <script>
@@ -129,14 +128,6 @@
   window.anvilVersion = "{{anvil-version}}";
   window.anvilAppInfo = {{app-info-object}};
   window.anvilGoogleApiKey = "{{google-api-key}}";
-  // docker-platform-server-base script adds sha's in html files - we put this variable here so that we can aggrissively cache the std-lib files
-  // the std-lib is loaded dynamically in runner.js
-  window.anvilSkulptLib = {
-    1: "{{app-origin}}/_/static/runtime/js/lib/skulpt-stdlib-1.json?buildTime=0",
-    2: "{{app-origin}}/_/static/runtime/js/lib/skulpt-stdlib-2.json?buildTime=0",
-    3: "{{app-origin}}/_/static/runtime/js/lib/skulpt-stdlib-3.json?buildTime=0"
-  };
-
   {
     // remove _anvil_session to prevent referrer links from including the session
     const url = new URL(window.location.href);

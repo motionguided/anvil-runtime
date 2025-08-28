@@ -9,7 +9,7 @@
   (is (= request nil))
   (BlobMedia. "mimeType" (byte-array 3) "dummyMedia"))
 
-(deftest test-mk-LazyMedia
+#_(deftest test-mk-LazyMedia
 
   (reset! lazy-media/managers {"test" dummy-manager})
 

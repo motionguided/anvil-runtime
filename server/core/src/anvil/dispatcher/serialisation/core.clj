@@ -10,7 +10,8 @@
             [anvil.dispatcher.types]
             [anvil.util :as util]
             [anvil.dispatcher.types :as types]
-            [anvil.runtime.conf :as conf])
+            [anvil.runtime.conf :as conf]
+            [anvil.core.sloppy-timeouts :as sloppy-timeouts])
   (:use [clojure.core.async :only [<! <!! >! >!! go go-loop chan close!]]
         [clojure.pprint]
         [slingshot.slingshot])
@@ -29,6 +30,8 @@
   (deserialise [this payload] "Returns a deserialised version of the payload map, with LiveObjects and Media reconstructed")
   (processBlobHeader [this hdr] "Tells the deserialiser that the next blob is described by this header map")
   (processBlob [this blob] "A blob has arrived; deliver it to the appropriate Media object")
+  (processMediaError [this err] "Tells the deserialiser that a media object transfer has failed, and no further chunks will arrive")
+  (interruptOutstandingMedia [this] "Tells the deserialiser that no more media chunks will be arriving")
   (loadLiveObject [this lo-map] "Load a LiveObject (or nil) and check for validity")
   (getConfig [this] "Returns the configuration map for this deserialiser"))
 
@@ -151,31 +154,33 @@
              (cons obj pruned-objects)))))
 
 
-(defn assemble-object [outstanding-media message-id {:keys [permitted-live-object-backends get-session-liveobject-key origin] :as serialisation-config} known-liveobject-methods {:keys [type] :as obj}]
+(defn assemble-object [add-outstanding-media! message-id {:keys [permitted-live-object-backends get-session-liveobject-key origin] :as serialisation-config} known-liveobject-methods {:keys [type] :as obj}]
   (let [origin (or origin :client)                          ;; be conservative if not specified
         get-session-liveobject-key (or get-session-liveobject-key (constantly nil))
-        mk-chunk-stream (fn [request-id {:keys [id name mime-type]}]
+        mk-chunk-stream (fn [{:keys [id name mime-type]}]
                           (let [c (chan (infinite-buffer))
                                 have-consumed? (atom false)]
-                            (log/trace "Storing channel" c " for " (pr-str [request-id id]))
-                            (swap! outstanding-media assoc-in [request-id id] c)
+                            (log/trace "Storing channel" c " for " (pr-str [message-id id]))
+                            (add-outstanding-media! id c)
                             (reify
                               MediaDescriptor
                               (getContentType [_this] mime-type)
                               (getName [_this] name)
                               ChunkedStream
-                              (consume [_this f]
+                              (consume [_this on-chunk on-error]
                                 (when-not (compare-and-set! have-consumed? false true)
                                   (throw (IllegalStateException. "Cannot consume a ChunkedStream twice")))
                                 (go-loop []
-                                  (when-let [chunk-args (<! c)]
-                                    (log/trace "Providing chunk" (pr-str chunk-args))
-                                    (apply f chunk-args)
+                                  (when-let [{:keys [chunk error] :as msg} (<! c)]
+                                    (log/trace "Providing chunk" (pr-str msg))
+                                    (cond
+                                      error (on-error error)
+                                      chunk (apply on-chunk chunk))
                                     (recur)))))))
 
 
         handlers {"Primitive"  #(:value obj)
-                  "DataMedia"  #(mk-chunk-stream message-id obj)
+                  "DataMedia"  #(mk-chunk-stream obj)
                   "LazyMedia"  #(types/map->LazyMedia obj)
                   "LiveObject" (fn [] (let [o (if (not= origin :client)
                                                 obj
@@ -190,12 +195,12 @@
                                             o (-> (dissoc o :path :type)
                                                   (update-in [:itemCache]
                                                              #(reduce (fn [cache [name val]]
-                                                                        (assoc cache name (assemble-object outstanding-media message-id serialisation-config known-liveobject-methods val)))
+                                                                        (assoc cache name (assemble-object add-outstanding-media! message-id serialisation-config known-liveobject-methods val)))
                                                                       {} %)))
 
                                             o (if (:iterItems o)
                                                 (update-in o [:iterItems :items] (fn [items]
-                                                                                   (doall (map #(assemble-object outstanding-media message-id serialisation-config known-liveobject-methods %) items))))
+                                                                                   (doall (map #(assemble-object add-outstanding-media! message-id serialisation-config known-liveobject-methods %) items))))
                                                 o)]
                                         (live-objects/load-LiveObjectProxy (dissoc o :path :type) serialisation-config)))
                   "Capability" (fn [] (let [{:keys [scope narrow mac]} obj]
@@ -274,13 +279,19 @@
 
       (doseq [{:keys [_type id binary-media]} media-objects]
         (if (instance? ChunkedStream binary-media)
-          (.consume binary-media (fn [chunk-idx last-chunk? data]
-                                   (send! (util/write-json-str {:type       "CHUNK_HEADER", :requestId request-id, :mediaId id,
-                                                                :chunkIndex chunk-idx, :lastChunk last-chunk?})
-                                          data)
-                                   (when last-chunk?
-                                     (swap! media-objects-remaining dec)
-                                     (check-complete))))
+          (.consume binary-media
+                    (fn on-chunk [chunk-idx last-chunk? data]
+                      (send! (util/write-json-str {:type       "CHUNK_HEADER", :requestId request-id, :mediaId id,
+                                                   :chunkIndex chunk-idx, :lastChunk last-chunk?})
+                             data)
+                      (when last-chunk?
+                        (swap! media-objects-remaining dec)
+                        (check-complete)))
+
+                    (fn on-error [{:keys [cause]}]
+                      (send! (util/write-json-str {:type "MEDIA_ERROR" :requestId request-id :mediaIds [id] :cause cause}))
+                      (swap! media-objects-remaining dec)
+                      (check-complete)))
 
           ;; It's Media, not a ChunkedStream. All we have is an InputStream, so we soldier on...
           (let [^InputStream is (.getInputStream binary-media)
@@ -304,14 +315,26 @@
       (if serialise-errors?
         (let [error-id (random/hex 6)]
           (log/error (::error-in-disassembly e) "Error in disassemble objects:" error-id)
-          [{:id (:id payload), :error {:type "anvil.server.InternalError" :message (str "Internal server error: " error-id)}} []])
-        (throw e)))))
+          (send! (util/write-json-str {:id (:id payload), :error {:type "anvil.server.InternalError" :message (str "Internal server error: " error-id)}})))
+        (throw+ e)))
+    (catch :anvil/websocket-payload-too-large e
+      (if serialise-errors?
+        (do
+          (log/error "Websocket payload too large" e)
+          (send! (util/write-json-str {:id    (:id payload),
+                                       :error {:type    "anvil.server.InternalError"
+                                               :message (str "Payload too large (" (::string-payload-length e)
+                                                             (when-let [bpl (::binary-payload-length e)]
+                                                               (str ", " (::binary-payload-length e))) ")")}})))
+        (throw+ e)))))
 
 (defn serialise-to-websocket-like! [payload lockable send-text-fn send-bytes-fn serialise-errors? session-liveobject-key & [on-complete!]]
   (serialise! payload (fn [^String json & [^bytes bytes]]
                         (when (or (>= (alength (.getBytes json)) conf/max-websocket-payload)
                                   (and bytes (>= (alength bytes) conf/max-websocket-payload)))
-                          (throw+ {:anvil/websocket-payload-too-large true}))
+                          (throw+ {:anvil/websocket-payload-too-large true
+                                   ::string-payload-length (alength (.getBytes json))
+                                   ::binary-payload-length (when bytes (alength bytes))}))
                         (locking lockable
                           (send-text-fn json)
                           (when bytes
@@ -347,22 +370,24 @@
         [result media-objects] (as-serialisable p {:disallow-media? true})]
     (cond-> result (contains? payload :id) (dissoc :id))))
 
-(defn- collect-media-as-byte-arrays [media-objects call-when-done]
+(defn- collect-media-as-byte-arrays [media-objects on-complete on-error]
   (if (empty? media-objects)
-    (call-when-done {})
+    (on-complete {})
     (let [collected (atom {})
           media-objects-remaining (atom (count media-objects))
           supply-media! (fn [id bytes]
                           (swap! collected assoc id bytes)
                           (when (zero? (swap! media-objects-remaining dec))
-                            (call-when-done @collected)))]
+                            (on-complete @collected)))]
       (doseq [{:keys [_type id binary-media]} media-objects]
         (if (instance? ChunkedStream binary-media)
           (let [baos (ByteArrayOutputStream.)]
-            (.consume binary-media (fn [chunk-idx last-chunk? data]
-                                     (.write baos ^bytes data)
-                                     (when last-chunk?
-                                       (supply-media! id (.toByteArray baos))))))
+            (.consume binary-media
+                      (fn on-chunk [chunk-idx last-chunk? data]
+                        (.write baos ^bytes data)
+                        (when last-chunk?
+                          (supply-media! id (.toByteArray baos))))
+                      on-error))
 
           ;; It's Media, so all we have is an InputStream. Read it synchronously.
           (let [bytes (util/inputstream->bytes (.getInputStream binary-media))]
@@ -370,15 +395,15 @@
 
 (defn serialise-to-map-with-media
   "Asynchronously serialise a payload and its media into JSON (base64ing as necessary). Calls (on-complete) with both when done."
-  [payload on-complete options]
+  [payload on-complete on-error options]
   (let [[payload media-objects] (as-serialisable payload options)]
     (collect-media-as-byte-arrays media-objects
                                   (fn [media-bytes]
                                     (on-complete payload
                                                  (map-kv (fn [id data]
                                                            [id (Base64/encodeBase64String data)])
-                                                         media-bytes))))))
-
+                                                         media-bytes)))
+                                  on-error)))
 
 (defn- assoc-in-json [obj [k & ks :as key-seq] v]
   (cond
@@ -397,7 +422,7 @@
       (log/warn "assoc-in-json ignoring:" (pr-str obj) (pr-str key-seq) (pr-str v))
       obj)))
 
-;; TODO: Expire media streams we haven't heard anything from for a while
+(def MEDIA-TIMEOUT-SECS 60)
 
 ;; permitted-live-object-backends is an atom of backends we own, so we don't need to validate the MAC on deserialisation
 (defn mk-Deserialiser
@@ -406,15 +431,32 @@
    ;; outstanding media is requestid -> mediaid -> channel
    (let [serialisation-config (merge {:permitted-live-object-backends #{}} serialisation-config)
          outstanding-media (atom {})
-         next-blob-header (atom nil)]
+         forget-media! (fn [request-id media-id]
+                         (swap! outstanding-media update-in [request-id] dissoc media-id)
+                         (when (= (@outstanding-media request-id) {})
+                           (swap! outstanding-media dissoc request-id)))
+         next-blob-header (atom nil)
+         process-media-error! (fn [requestId mediaId cause]
+                                (when-let [c (get-in @outstanding-media [requestId mediaId])]
+                                  (log/trace "Writing error into channel" c)
+                                  (>!! c {:error {:cause cause}})
+                                  (close! c)
+                                  (forget-media! requestId mediaId)))
+         sloppy-timeout (sloppy-timeouts/mk-SloppyTimeout 10 (fn on-timeout [[request-id media-id]]
+                                                               (process-media-error! request-id media-id
+                                                                                     {:type "anvil.server.TimeoutError"
+                                                                                      :message "Timeout during media transfer"})))]
 
      (reify Deserialiser
        (deserialise [_this payload]
-         (let [known-liveobject-methods (atom {})]
+         (let [known-liveobject-methods (atom {})
+               add-outstanding-media! (fn [media-id ch]
+                                        (sloppy-timeouts/set-timeout sloppy-timeout [(:id payload) media-id] MEDIA-TIMEOUT-SECS)
+                                        (swap! outstanding-media assoc-in [(:id payload) media-id] ch))]
            (assert (:id payload) "Cannot deserialise payload without id")
            (reduce (fn [json {:keys [path] :as obj}]
                      (let [path (map #(if (string? %) (keyword %) %) path)
-                           deserialised-obj (assemble-object outstanding-media (:id payload) serialisation-config known-liveobject-methods obj)]
+                           deserialised-obj (assemble-object add-outstanding-media! (:id payload) serialisation-config known-liveobject-methods obj)]
                        (condp = (:type obj)
                          ["ValueType"] (assoc-in-json json path (SerializedPythonObject. deserialised-obj (get-in json path)) #_(with-meta (get-in json path) {:anvil/type deserialised-obj}))
                          ["ClassType"] (assoc-in-json json path (SerializedPythonClass. deserialised-obj))
@@ -427,13 +469,25 @@
          (let [{:keys [requestId, mediaId] :as hdr} @next-blob-header]
            (log/trace "Looking up channel for" (pr-str [requestId mediaId]) "(" (alength data) "bytes)")
            (when-let [c (get-in @outstanding-media [requestId mediaId])]
-             (log/trace "Writing into channel" c)
-             (>!! c [(:chunkIndex hdr), (:lastChunk hdr), data])
-             (when (:lastChunk hdr)
-               (close! c)
-               (swap! outstanding-media update-in [requestId] dissoc mediaId)
-               (when (= (@outstanding-media requestId) {})
-                 (swap! outstanding-media dissoc requestId))))))
+             (log/trace "Writing chunk into channel" c)
+             (>!! c {:chunk [(:chunkIndex hdr), (:lastChunk hdr), data]})
+             (if (:lastChunk hdr)
+               (do
+                 (close! c)
+                 (forget-media! requestId mediaId)
+                 (sloppy-timeouts/clear-timeout sloppy-timeout [requestId mediaId]))
+               (sloppy-timeouts/set-timeout sloppy-timeout [requestId mediaId] MEDIA-TIMEOUT-SECS)))))
+       (processMediaError [_this {:keys [requestId mediaIds cause]}]
+         (log/trace (str "Received media transfer error signal: REQ: " requestId ", MEDIA: " mediaIds ", CAUSE: " cause))
+         (doseq [mediaId mediaIds]
+           (process-media-error! requestId mediaId cause)
+           (sloppy-timeouts/clear-timeout sloppy-timeout [requestId mediaId])))
+       (interruptOutstandingMedia [_this]
+         (doseq [[request-id media] @outstanding-media]
+           (doseq [media-id (keys media)]
+             (process-media-error! request-id media-id {:type    "anvil.server.RuntimeUnavailableError"
+                                                        :message "Error during media transfer"})
+             (sloppy-timeouts/clear-timeout sloppy-timeout [request-id media-id]))))
        (loadLiveObject [_this lo-map]
          (when lo-map
            (live-objects/load-LiveObjectProxy lo-map serialisation-config)))

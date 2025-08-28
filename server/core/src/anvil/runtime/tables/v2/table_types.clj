@@ -4,7 +4,8 @@
             [clojure.tools.logging :as log]
             [anvil.util :as util]
             [anvil.dispatcher.serialisation.lazy-media :as lazy-media]
-            [anvil.dispatcher.native-rpc-handlers.util :as rpc-util])
+            [anvil.dispatcher.native-rpc-handlers.util :as rpc-util]
+            [anvil.runtime.sessions :as sessions])
   (:import (anvil.dispatcher.types Date DateTime MediaDescriptor Media ChunkedStream BlobMedia SerialisableForRpc SerializedPythonObject)
            (java.time.format DateTimeFormatter DateTimeFormatterBuilder)
            (java.time.temporal ChronoField)
@@ -123,7 +124,7 @@
   (when-not (is-type? json-value col-type)
     (str "Column '" col-name "' is a " (get-type-name tables col-type) " - "
          (let [val-type (get-type-from-value json-value)]
-           (log/error (str "Column type mismatch: " (pr-str col-type) " vs " (pr-str val-type)))
+           (log/error (str "Column type mismatch: " (pr-str col-type) " vs " (pr-str val-type) " in session " (sessions/get-id rpc-util/*session-state*) " of env " (:env_id rpc-util/*environment*) " of app " rpc-util/*app-id*))
            (or (:error val-type)
                (str "cannot set it to a " (get-type-name tables val-type)))))))
 

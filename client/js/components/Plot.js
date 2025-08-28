@@ -65,21 +65,19 @@ description: |
 
   Plots are interactive by default. Create a static plot by setting the `interactive` property to `False`.
 
-  ![An example plot](/doc/img/screenshots/plot-example.png)
-
   See [the Plotly documentation](https://plot.ly/python/) for more details and examples.
 
 
 */
 
 
-var PyDefUtils = require("PyDefUtils");
-const { PostponedResizeObserver } = require("../utils");
-const { pyLazyMod, datetimeMod } = require("@runtime/runner/py-util");
-const { appendSvgSpinner, SpinnerLoader } = require("@runtime/runner/loading-spinner");
-const { pyCall, toPy } = require("@Sk");
+import PyDefUtils from "PyDefUtils";
+import { PostponedResizeObserver } from "../utils";
+import { pyLazyMod, datetimeMod } from "@runtime/runner/py-util";
+import { appendSvgSpinner, SpinnerLoader } from "@runtime/runner/loading-spinner";
+import { pyCall, toPy } from "@Sk";
 
-module.exports = (pyModule) => {
+const Plot = (pyModule) => {
 
     const go = pyLazyMod("plotly.graph_objs");
     const util = pyLazyMod("anvil.util");
@@ -97,10 +95,17 @@ module.exports = (pyModule) => {
         });
     };
 
-    const Templates = { none: {}, default: "none" };
+    const Templates = {
+        none: {},
+        default: "none",
+        // backwards compatibility
+        get rally() {
+            return this.rally_dark;
+        },
+    };
 
     const PLOTLY_FETCHABLE_TEMPLATES = ["plotly", "plotly_white", "plotly_dark", "presentation", "ggplot2", "seaborn", "simple_white", "gridon", "xgridoff", "ygridoff"];
-    const ANVIL_FETCHABLE_TEMPLATES = ["rally", "material_light", "material_dark"];
+    const ANVIL_FETCHABLE_TEMPLATES = ["rally_dark", "rally_light", "manarola_light", "manarola_dark", "mykonos_light", "mykonos_dark", "material_light", "material_dark"];
 
     async function templateGetter(templateName) {
         const resp = await fetch(`${window.anvilAppOrigin}/_/static/runtime/js/lib/templates/${templateName}.json`);
@@ -634,3 +639,5 @@ module.exports = (pyModule) => {
 };
 
 /*!defClass(anvil,Plot,Component)!*/
+
+export default Plot;

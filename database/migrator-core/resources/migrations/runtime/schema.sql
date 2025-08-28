@@ -1,5 +1,8 @@
 -- This is the schema that will set up the rest of a Postgres database
 -- for the Anvil runtime.
+-- This file is not used by the migrator, but is guaranteed to be correct
+-- by the `platform/database/migrator/tests/check_migrations.py` script.
+
 -- DO NOT run this to upgrade an existing server. Obviously.
 -- (That's what the migrator is for.)
 

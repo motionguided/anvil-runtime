@@ -1,11 +1,17 @@
 # Run this file, using a serialised version of the RPC protocol on stdin + stdout
 from __future__ import absolute_import
+import time
+import_start_time = int(time.time() * 1e9)
 import os, sys, threading, json, importlib
-from anvil_downlink_worker import handle_incoming_call, load_app
+from anvil_downlink_worker import handle_incoming_call, load_app, internal_tracer_provider
+import anvil_downlink_worker
 from anvil_downlink_util.pipes import MessagePipe
 from anvil import _serialise, _server, _threaded_server
 import anvil.server
 import anvil.pdf
+
+from anvil_downlink_util.tracing import context
+tracer = internal_tracer_provider.get_tracer(__name__)
 
 PIPE_IN = MessagePipe(os.fdopen(os.dup(0), 'rb'))
 PIPE_OUT = MessagePipe(os.fdopen(os.dup(1), 'wb'))
@@ -52,13 +58,19 @@ _threaded_server.send_reqresp = send_reqresp
 
 
 def run():
+    global import_start_time
+    ready_time = int(time.time()*1e9)
     while True:
         msg, bindata = PIPE_IN.receive()
+
         type = msg.get("type", None)
         if type in ["CALL", "LAUNCH_BACKGROUND", "LAUNCH_REPL", "REPL_COMMAND", "TERMINATE_REPL", "DEBUG_REQUEST"]:
-            handle_incoming_call(msg, write_pipe)
+            handle_incoming_call(msg, write_pipe, import_start_time, ready_time)
+            import_start_time = None
+            ready_time = None
 
         elif type == "PROVIDE_APP":
+            context.attach(anvil_downlink_worker.APP_LOAD_REQUESTED)
             load_app(msg["app"])
 
         elif type == "GET_TASK_STATE":
@@ -79,6 +91,8 @@ def run():
         elif type == "CHUNK_HEADER":
             _serialise.process_blob_header(msg)
             _serialise.process_blob(bindata)
+        elif type == "MEDIA_ERROR":
+            _serialise.process_media_error(msg)
         elif type is None and ("response" in msg or "error" in msg):
             _threaded_server.IncomingResponse(msg)
         else:
@@ -88,4 +102,9 @@ def run():
 
 
 if __name__ == "__main__":
-    run()
+    try:
+        run()
+    except KeyboardInterrupt:
+        OLD_STDERR.write("Downlink worker interrupted".encode())
+        OLD_STDERR.flush()
+        os._exit(1)

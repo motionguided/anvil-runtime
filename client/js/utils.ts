@@ -109,7 +109,7 @@ export const ResizeObserverPolyfill = window.ResizeObserver ?? _ResizeObserverPo
 /** avoids the first call to the resize observer callback */
 export class PostponedResizeObserver extends ResizeObserverPolyfill {
     _init = true;
-    _t: undefined | number = undefined;
+    _t: undefined | ReturnType<typeof setTimeout> = undefined;
     constructor(cb: () => void) {
         super(() => {
             // we don't want to fire this when we are first observed

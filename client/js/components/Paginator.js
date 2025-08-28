@@ -1,10 +1,9 @@
 "use strict";
 
-const { getCssPrefix } = require("@runtime/runner/legacy-features");
-var PyDefUtils = require("PyDefUtils");
+import { getCssPrefix } from "@runtime/runner/legacy-features";
+import PyDefUtils from "PyDefUtils";
 
-
-module.exports = (pyModule) => {
+const Paginator = (pyModule) => {
     pyModule["Paginator"] = PyDefUtils.mkComponentCls(pyModule, "Paginator", {
         base: pyModule["ClassicContainer"],
 
@@ -243,3 +242,5 @@ module.exports = (pyModule) => {
         }
     });
 }
+
+export default Paginator;

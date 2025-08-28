@@ -1,5 +1,6 @@
 (ns anvil.runtime.tables.v2.search
-  (:require [clojure.pprint :refer [pprint]]
+  (:require [anvil.runtime.tables.v2.jdbc-trace :as jdbc-t]
+            [clojure.pprint :refer [pprint]]
             [slingshot.slingshot :refer :all]
             [clojure.tools.logging :as log]
             [anvil.runtime.tables.v2.util :as util-v2]
@@ -308,8 +309,8 @@
     ;(log/trace "CURSOR EXPR" CURSOR-EXPR cursor-params)
     [(str "SELECT id, " SELECT-EXPR ", 0 AS fid, ROW_NUMBER() OVER (ORDER BY " ORDER-BY-EXPR ") AS primary_order FROM app_storage_data WHERE table_id = ? AND " WHERE-EXPR
           (when cursor (str " AND " CURSOR-EXPR))
-          " ORDER BY primary_order LIMIT " (int chunk-size))
-     (concat select-params order-by-params [table-id] where-params cursor-params)]))
+          " ORDER BY " ORDER-BY-EXPR " LIMIT " (int chunk-size))
+     (concat select-params order-by-params [table-id] where-params cursor-params order-by-params)]))
 
 (defn COUNT-QUERY [tables table-id query]
   (let [[WHERE-EXPR where-params] (QUERY->SQL query)]
@@ -382,7 +383,7 @@
 (defn count-rows [tables db-c {table-id :id :keys [restrict] :as view-spec} query]
   (let [query (cond-> query restrict (both-queries restrict))
         [SQL params] (COUNT-QUERY tables table-id query)]
-    (:n (first (jdbc/query db-c (cons SQL params))))))
+    (:n (first (jdbc-t/query db-c (cons SQL params))))))
 
 ;; MISC: Inference
 (defn infer-values-from-query [{:keys [op col terms value] :as query}]

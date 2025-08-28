@@ -21,6 +21,7 @@ import {
     pyKeyErrorConstructor,
     pyLookupErrorConstructor,
     pyMemoryErrorConstructor,
+    pyMethodConstructor,
     pyModuleNotFoundErrorConstructor,
     pyNameErrorConstructor,
     pyNewableType,
@@ -106,6 +107,7 @@ export namespace Sk {
         const set: pySetConstructor;
         const slice: pySliceConstructor;
         const sk_method: pyBuiltinFunctionOrMethodConstructor;
+        const method: pyMethodConstructor;
         const str: pyStrConstructor;
         const tuple: pyTupleConstructor;
         const type: pyTypeConstructor;
@@ -194,7 +196,7 @@ export namespace Sk {
         function abs<T extends pyFloat | pyInt>(obj: T): T;
         function ord(x: pyBytes | pyStr): pyInt;
         function chr(x: pyInt): pyStr;
-        function dir(obj: pyObject): pyList;
+        function dir(obj: pyObject): pyList<pyStr> | Suspension;
         function repr(obj: pyObject): pyStr;
         function ascii(obj: pyObject): pyStr;
 
@@ -313,7 +315,7 @@ export namespace Sk {
         function chain<T = any, R = any>(initArg: T | Suspension, ...chainedFns: ChainedFns<T, R>): R | Suspension;
         function chain<R = any>(initArg: any, ...chainedFns: ChainedFns<any, R>): R | Suspension;
 
-        function tryCatch<R = any, E = any>(fn: () => Suspension | R, catchFn: (e: any) => R | E): R | E | Suspension;
+        function tryCatch<R = any>(fn: () => Suspension | R, catchFn: (e: any) => R | Suspension): R | Suspension;
 
         function retryOptionalSuspensionOrThrow<T = any>(obj: T | Suspension): T extends Suspension ? never : T;
 
@@ -383,10 +385,9 @@ export namespace Sk {
             ? pyDict<pyStr, pyObject>
             : pyObject;
 
-        function toJs<T = any>(
-            obj: T,
-            hooks?: any
-        ): T extends pyStr
+        type RecursiveToJs<T> = unknown extends T
+            ? any
+            : T extends pyStr
             ? string
             : T extends pyNoneType
             ? null
@@ -397,14 +398,15 @@ export namespace Sk {
             : T extends pyFloat
             ? number
             : T extends pyTuple | pyList
-            ? any[]
-            : T extends pyFloat
-            ? number
+            ? RecursiveToJs<T["v"][number]>
             : T extends pyBytes
             ? Uint8Array
             : T extends pyObject
             ? unknown
             : T;
+
+        function toJs<T = any>(obj: T, hooks?: any): RecursiveToJs<T>;
+
         function proxy<T = any>(obj: T): pyProxy<T>;
 
         /** @deprecated use Sk.ffi.toPy */
@@ -549,10 +551,10 @@ export namespace Sk {
 }
 
 type ChainedFns<T, R> =
-| [...((prevRet: T) => T | Suspension)[], (prevRet: T) => R]
-| ((prevRet: T) => T | Suspension)[]
-| [(prevRet: T) => R]
-| [];
+    | [...((prevRet: T) => T | Suspension)[], (prevRet: T) => R]
+    | ((prevRet: T) => T | Suspension)[]
+    | [(prevRet: T) => R]
+    | [];
 
 export type Args<T extends pyObject[] = pyObject[]> = T;
 export type Kws = (string | pyObject)[]; // Can't declare alternating array in TS
@@ -575,13 +577,13 @@ export type BinOp =
 
 export type UnaryOp = "Not" | "USub" | "UAdd" | "Invert";
 
-export type Flags = | { OneArg: true }
-| { NoArgs: true }
-| { FastCall: true }
-| { FastCall: true; NoKwargs: true }
-| { MinArgs: number; MaxArgs?: number }
-| { NamedArgs: (null | string)[]; Defaults?: any[] };
-
+export type Flags =
+    | { OneArg: true }
+    | { NoArgs: true }
+    | { FastCall: true }
+    | { FastCall: true; NoKwargs: true }
+    | { MinArgs: number; MaxArgs?: number }
+    | { NamedArgs: (null | string)[]; Defaults?: any[] };
 
 type Skulpt = typeof Sk;
 

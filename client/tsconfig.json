@@ -1,12 +1,13 @@
 {
-    "extends": "../../../tsconfig.base.json",
+    "extends": "./tsconfig.base.json",
     "composite": true,
     "compilerOptions": {
         "baseUrl": "./",
         "paths": {
-            "@Sk": ["@Sk"],
-            "PyDefUtils": ["PyDefUtils"],
-            "@runtime/*": ["*"]
+            "@Sk": ["./js/@Sk"],
+            "PyDefUtils": ["./js/PyDefUtils.js"],
+            "@runtime/*": ["./js/*"],
+            "@runtime-assets/*": ["./*"]
         },
         "jsx": "preserve",
         "jsxFactory": "PyDefUtils.h"

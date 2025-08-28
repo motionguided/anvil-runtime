@@ -15,7 +15,8 @@
             [anvil.core.tracing :as tracing]
             [clojure.string :as str]
             [anvil.runtime.sessions :as sessions])
-  (:import (io.opentelemetry.api.trace Span StatusCode)))
+  (:import (io.opentelemetry.api.trace Span StatusCode)
+           (java.time Instant)))
 
 (clj-logging-config.log4j/set-logger! :level :warn)
 
@@ -90,19 +91,28 @@
 
 (def ^:dynamic ^Span *responding-span* nil)
 
+(defn wrap-return-path
+  ([return-path on-success on-error] (wrap-return-path return-path on-success on-error nil nil))
+  ([return-path on-success on-error on-respond] (wrap-return-path return-path on-success on-error on-respond nil))
+  ([return-path on-success on-error on-respond on-update]
+   {:respond! (fn [resp]
+                (if (:error resp)
+                  (when on-error (on-error))
+                  (when on-success (on-success)))
+                (when on-respond (on-respond))
+                (respond! return-path resp))
+    :update!  (fn [update]
+                (when on-update (on-update))
+                (update! return-path update))}))
+
 (defn return-path-with-closing-span [return-path span]
-  {:respond! (fn [resp]
-               (if (:error resp)
-                 (.setStatus span (StatusCode/ERROR))
-                 (.setStatus span (StatusCode/OK)))
-               (tracing/end-span! span)
-               (respond! return-path resp))
-   :update!  (fn [update]
-               ;; We may choose to add tracing events here.
-               (update! return-path update))})
+  (wrap-return-path return-path
+                    #(.setStatus span StatusCode/OK)
+                    #(.setStatus span StatusCode/ERROR)
+                    #(tracing/end-span! span)))
 
 (defn request-task-description [{{:keys [live-object func] :as call} :call
-                                 :keys [background? command liveObjectCall] :as request}]
+                                 :keys                               [background? command liveObjectCall] :as request}]
   ;; Request might be serialised (command/liveObjectCall) or full (func/live-object). Cope with either.
   (cond
     call
@@ -144,15 +154,19 @@
           (app-log/record-trace! session-state (tracing/get-trace-id child-span) (:short task-description)))
         [request return-path child-span]))))
 
+
 (defn dispatch!
   [{{:keys [live-object args kwargs func] :as call} :call
-    :keys [app app-id app-info environment app-origin session-state call-stack origin thread-id use-quota? background? scheduled? tracing-span use-existing-tracing-span? vt_global]
+    :keys [app app-id app-info environment app-origin session-state call-stack origin thread-id use-quota? background? scheduled? tracing-span use-existing-tracing-span? bg-task-watch-key vt_global]
     :as request}
    return-path]
 
-  (let [[request return-path child-span] (generate-child-span-and-return-path request return-path)]
+  (let [not-echo (not= "anvil.private.echo" func)
+        [request return-path child-span] (if not-echo
+                                           (generate-child-span-and-return-path request return-path)
+                                           [request return-path (Span/getInvalid)])]
 
-    (when (not= "anvil.private.echo" func)
+    (when not-echo
       (log/debug "Dispatch!" (str func (when live-object (str " (" (:backend live-object) ")"))) "for" app-id)
       (log/trace "Args:" (pr-str args))
       (log/trace "Kwargs:" (pr-str kwargs)))
@@ -183,13 +197,14 @@
 
       :else
       (binding [*stale-uplink?* (atom false)]
-        (let [start-time (System/nanoTime)
+        (let [start-time-nano (System/nanoTime)
+              start-time (System/currentTimeMillis)
               dispatch-end (atom 0)
               clock-stopped (atom 0)
               metrics-timer (atom nil)
               wrapped-respond! (fn [resp]
                                  (when (and use-quota? (= 1 (swap! clock-stopped inc)))
-                                   (accounting/record-platform-server-use! session-state (/ (double (- (System/nanoTime) start-time)) 1000000000.0)))
+                                   (accounting/record-platform-server-use! session-state (/ (double (- (System/nanoTime) start-time-nano)) 1000000000.0)))
 
                                  (when-let [stop-timer! @metrics-timer]
                                    (stop-timer!))
@@ -200,10 +215,10 @@
                                                              (:anvil/enable-profiling @session-state))
                                                     {:profile (merge {:origin      "Server (Native)"
                                                                       :description (str "Server dispatch (" func ")")
-                                                                      :start-time  (/ start-time 1000000.0)
-                                                                      :end-time    (/ (System/nanoTime) 1000000.0)}
+                                                                      :start-time  start-time
+                                                                      :end-time    (+ start-time (/ (- (System/nanoTime) start-time-nano) 1e6))}
                                                                      (when (:profile resp)
-                                                                       {:children [{:origin "Dispatch" :description "Dispatch setup" :start-time (/ start-time 1000000.0) :end-time (/ @dispatch-end 1000000.0)} (:profile resp)]}))}))))
+                                                                       {:children [{:origin "Dispatch" :description "Dispatch setup" :start-time start-time :end-time (+ start-time (/ (- @dispatch-end start-time-nano) 1e6))} (:profile resp)]}))}))))
 
               return-path (assoc return-path :respond! wrapped-respond!)
 

@@ -3,10 +3,10 @@
 import { chainOrSuspend, pyCallOrSuspend, pyNone, pyStr } from "@Sk";
 import { getRandomStr } from "../utils";
 import { isInvisibleComponent } from "./helpers";
-import { validateChild } from "./Container";
+import { indexInRange, validateChild } from "./Container";
 import { getCssPrefix } from "@runtime/runner/legacy-features";
 
-var PyDefUtils = require("PyDefUtils");
+import PyDefUtils from "PyDefUtils";
 
 /*#
 id: columnpanel
@@ -31,7 +31,7 @@ description: |
 
 */
 
-module.exports = (pyModule) => {
+const ColumnPanel = (pyModule) => {
 
     pyModule["ColumnPanel"] = PyDefUtils.mkComponentCls(pyModule, "ColumnPanel", {
         base: pyModule["ClassicContainer"],
@@ -300,7 +300,7 @@ module.exports = (pyModule) => {
                     *   
             */
 
-            /*!defMethod(_,component,full_width_row=False,**layout_props)!2*/ "Add a component to the bottom of this ColumnPanel. Useful layout properties:\n\n  full_width_row = True|False\n  row_background = [colour]"
+            /*!defMethod(_,component,[index=None],full_width_row=False,**layout_props)!2*/ "Add a component to this ColumnPanel at the 'index'th position. If 'index' is not specified, adds to the bottom. Useful layout properties:\n\n  full_width_row = True|False\n  row_background = [colour]"
             $loc["add_component"] = new PyDefUtils.funcWithKwargs(function (kwargs, self, component) {
                 validateChild(component);
 
@@ -315,13 +315,16 @@ module.exports = (pyModule) => {
                         const panelId = self._anvil.panelId;
                         const wrap_on = self._anvil.props["wrap_on"];
 
-                        const {index, ...layoutProps} = kwargs;
+                        let { index, ...layoutProps } = kwargs;
+                        index = indexInRange(index, self);
 
                         if (component._anvil) { // this had better be for the designer's benefit only
                             component._anvil.layoutProps = layoutProps;
                         }
 
                         const _add = (component, layoutProps, childIdx) => {
+                            if (isInvisibleComponent(component)) return;
+
                             const componentElement = component.anvil$hooks.domElement;
                             componentElement.classList.add("belongs-to-" + panelId);
                             const {grid_position: gridPos, full_width_row, row_background} = layoutProps;
@@ -365,9 +368,9 @@ module.exports = (pyModule) => {
                             self._anvil.componentColumnContainers.set(component, currentColContainer);
                             currentColContainer.appendChild(paddingElement);
                             paddingElement.appendChild(componentElement);
-                        }
+                        };
 
-                        if (index == null || index === self._anvil.components.length) {
+                        if (index == null) {
 
                             _add(component, layoutProps, self._anvil.components.length);
 
@@ -379,7 +382,7 @@ module.exports = (pyModule) => {
 
                             const withNewComponent = [...self._anvil.components];
                             withNewComponent.splice(index, 0, {component, layoutProperties: layoutProps});
-                            withNewComponent.map(({component, layoutProperties}, idx) => _add(component, layoutProperties, idx));
+                            withNewComponent.forEach(({component, layoutProperties}, idx) => _add(component, layoutProperties, idx));
                         }
 
                         return pyModule["ClassicContainer"]._doAddComponent(self, component, kwargs, {
@@ -495,3 +498,5 @@ module.exports = (pyModule) => {
  *  - Methods: add_component
  *
  */
+
+export default ColumnPanel;

@@ -28,12 +28,14 @@ import {
     pyType,
     pyTypeError,
     toPy,
+    tryCatchOrSuspend,
 } from "../@Sk";
 import { ComponentYaml, FormLayoutYaml } from "../runner/data";
 import {
     funcFastCall,
     kwsToObj,
     objToKws,
+    reportError,
     s_add_event_handler,
     s_anvil_events,
     s_get_components,
@@ -449,7 +451,7 @@ export type Interaction =
 
 export interface UnsetPropertyValue {
     value: any;
-    css: string;
+    css: any;
 }
 
 export interface UnsetPropertyValues {
@@ -1094,7 +1096,17 @@ export function getListenerCallbacks(c: Component, eventName: string, kws?: Kws)
     const eventArgs = kwsToObj(kws);
     eventArgs["sender"] = c;
     eventArgs["event_name"] = new pyStr(eventName);
-    return listeners.map((pyFn) => () => pyCallOrSuspend(pyFn, [], objToKws(eventArgs)));
+    return listeners.map(
+        (pyFn) => () =>
+            tryCatchOrSuspend(
+                () => pyCallOrSuspend(pyFn, [], objToKws(eventArgs)),
+                (e) => {
+                    // don't fail here since it will prevent other page-added/page-removed handlers from firing
+                    reportError(e);
+                    return pyNone;
+                }
+            )
+    );
 }
 
 function shouldFirePageAdded(c: Component) {

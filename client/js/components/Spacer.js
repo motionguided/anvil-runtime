@@ -1,6 +1,6 @@
 "use strict";
 
-var PyDefUtils = require("PyDefUtils");
+import PyDefUtils from "PyDefUtils";
 
 /*#
 id: spacer
@@ -16,7 +16,7 @@ description: |
   or to make vertical space on your form.
 */
 
-module.exports = (pyModule) => {
+const Spacer = (pyModule) => {
     pyModule["Spacer"] = PyDefUtils.mkComponentCls(pyModule, "Spacer", {
         properties: PyDefUtils.assembleGroupProperties(/*!componentProps(Spacer)!1*/ ["visibility", "layout", "height", "tooltip", "user data"], {
             height: {
@@ -29,6 +29,8 @@ module.exports = (pyModule) => {
         element: (props) => <PyDefUtils.OuterElement className="anvil-spacer" {...props} />,
     });
 };
+
+export default Spacer;
 
 /*!defClass(anvil,Spacer,Component)!*/
 

@@ -185,9 +185,9 @@
     (.schedule @failsafe-timeout timer-task 45000)
 
     (if (util/app-locked? app-id)
-      (throw (RejectException. "App down for maintenance."))
+      (throw (RejectException. TEMPORARY-FAILURE "App down for maintenance."))
       (if-let [error-message (app-data/should-app-be-blocked? app-id app-session environment)]
-        (throw (RejectException. error-message))
+        (throw (RejectException. TEMPORARY-FAILURE error-message))
         (try+
           (dispatcher/dispatch! {:call          {:func (str "email:handle_message"),
                                                  :args [transformed-email] :kwargs {}}
@@ -215,7 +215,7 @@
           (catch Object e
             (let [error-id (random/hex 6)]
               (log/error e "Error in app API:" error-id)
-              (throw (RejectException. (str "Internal server error: " error-id))))))))))
+              (throw (RejectException. TEMPORARY-FAILURE (str "Internal server error: " error-id))))))))))
 
 
 (def smtp-listener-factory (SimpleMessageListenerAdapter. (reify SimpleMessageListener

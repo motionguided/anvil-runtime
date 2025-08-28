@@ -1,7 +1,7 @@
 "use strict";
 
-const { getCssPrefix } = require("@runtime/runner/legacy-features");
-var PyDefUtils = require("PyDefUtils");
+import { getCssPrefix } from "@runtime/runner/legacy-features";
+import PyDefUtils from "PyDefUtils";
 
 
 /*#
@@ -16,8 +16,8 @@ description: |
   # Create a DropDown
   b = DropDown(items=["Item 1", "Item 2"])
   ```
-  This is an Anvil drop-down. Drag and drop onto your form, or create one in code with the `DropDown` constructor:
-  ![Screenshot](img/screenshots/dropdown.png)
+  This is an Anvil drop-down. Drag and drop onto your form, or create one in code with the `DropDown` constructor.
+  
   If the `items` property can be a list of strings (`["One", "Two", "Three"]`), or a list of 2-tuples (`[("First Option", 0), ("Second Option", 1)]`).
   If you use a list of strings, the `selected_value` property always returns the currently selected string.
   ```python
@@ -41,7 +41,7 @@ description: |
   DropDown `items` are updated in the UI when the `items` attribute is set using the `=` operator. If you're using `append` to construct a new `items` list, run the `=` operator to make the change live:
 */
 
-module.exports = (pyModule) => {
+const DropDown = (pyModule) => {
     const { isTrue } = Sk.misceval;
 
     pyModule["DropDown"] = PyDefUtils.mkComponentCls(pyModule, "DropDown", {
@@ -307,6 +307,8 @@ module.exports = (pyModule) => {
         });
     };
 };
+
+export default DropDown;
 
 /*!defClass(anvil,DropDown,Component)!*/
 

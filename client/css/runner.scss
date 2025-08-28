@@ -7,9 +7,9 @@ If you modify this file the sha will change
 you should amend the static sha value in runtime/server/core/src/anvil/runtime/server.clj:legacy-runtime-templates
 */
 
-@import "./runner/banner.scss";
-@import "./runner/error-indicator.scss";
-@import "./runner/loading-spinner.scss";
+@use "runner/banner.scss";
+@use "runner/error-indicator.scss";
+@use "runner/loading-spinner.scss";
 
 /* Fix a bootstrap-ism that isn't helpful */
 .form-control, .btn {

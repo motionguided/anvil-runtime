@@ -1,93 +1,26 @@
 //import * as $ from "jquery";
-import { chainOrSuspend, Suspension, suspensionToPromise } from "@Sk";
+import { chainOrSuspend, pyObject, Suspension, suspensionToPromise } from "@Sk";
 import { Container } from "@runtime/components/Container";
-import { setupDefaultAnvilPluggableUI } from "@runtime/modules/_anvil/pluggable-ui";
-import { pyPropertyUtilsApi } from "@runtime/runner/component-property-utils-api";
 import { hooks } from "@runtime/runner/index";
-import * as PyDefUtils from "../PyDefUtils";
-import * as componentModule from "../components";
+import PyDefUtils from "PyDefUtils";
 import { Component } from "../components/Component";
-import { pyDesignerApi } from "./component-designer-api";
 import { registerJsPythonModules } from "./components-in-js/common";
 import { AppYaml, data, DependencyYaml } from "./data";
-import { uncaughtExceptions } from "./error-handling";
 import { createFormTemplateClass } from "./forms";
 import { setupLegacyV1AnvilModule } from "./legacy-python-environment";
-import { provideLoggingImpl, stdout } from "./logging";
+import loadOrdinaryModulesReturningAnvilModule, { registerServerCallSuspension } from "./load-modules";
+import { stdout } from "./logging";
 import { PyModMap } from "./py-util";
-import { Slot, WithLayout } from "./python-objects";
 import { readBuiltinFiles } from "./read-builtin-files";
 import { warn } from "./warnings";
 
 export const skulptFiles: { [filename: string]: string } = {};
-
-let registerServerCallSuspension: null | ((s: Suspension<{ serverRequestId: string }>) => void) = null;
 
 function builtinRead(path: string) {
     if (path in skulptFiles) {
         return skulptFiles[path];
     }
     return readBuiltinFiles(path);
-}
-
-function loadOrdinaryModulesReturningAnvilModule() {
-    const anvilModule = require("../modules/anvil")(data.appOrigin, uncaughtExceptions);
-
-    componentModule.defineSystemComponents(anvilModule);
-
-    PyDefUtils.loadModule("anvil", anvilModule);
-
-    // Preload all modules we will ever load under the "anvil" package now, because we might need to duplicate
-    // them later for v1 runtime apps
-
-    const base64Module = require("../modules/base64")();
-    PyDefUtils.loadModule("base64", base64Module);
-
-    const xmlModule = require("../modules/xml")();
-    PyDefUtils.loadModule("anvil.xml", xmlModule);
-
-    const reModule = require("../modules/regex")();
-    PyDefUtils.loadModule("anvil.regex", reModule);
-
-    const tzModule = require("../modules/tz")();
-    PyDefUtils.loadModule("anvil.tz", tzModule);
-
-    const shapesModule = require("../modules/shapes")();
-    PyDefUtils.loadModule("anvil.shapes", shapesModule);
-
-    const serverModuleAndLog = require("../modules/server")(data.appId, data.appOrigin);
-    provideLoggingImpl(serverModuleAndLog.log);
-    registerServerCallSuspension = serverModuleAndLog.registerServerCallSuspension;
-    PyDefUtils.loadModule("anvil.server", serverModuleAndLog.pyMod);
-
-    const httpModule = require("../modules/http")();
-    PyDefUtils.loadModule("anvil.http", httpModule);
-
-    const jsModule = require("../modules/js")();
-    PyDefUtils.loadModule("anvil.js", jsModule);
-
-    // server needs to have loaded first
-    const historyModule = require("../modules/history").default;
-    PyDefUtils.loadModule("anvil.history", historyModule);
-
-    const imageModule = require("../modules/image")();
-    PyDefUtils.loadModule("anvil.image", imageModule);
-
-    const mediaModule = require("../modules/media")();
-    PyDefUtils.loadModule("anvil.media", mediaModule);
-
-    PyDefUtils.loadModule("anvil.code_completion_hints", require("../modules/code-completion-hints")());
-
-    PyDefUtils.loadModule("anvil.designer", pyDesignerApi);
-
-    PyDefUtils.loadModule("anvil.property_utils", pyPropertyUtilsApi);
-
-    anvilModule["Slot"] = Slot;
-    anvilModule["WithLayout"] = WithLayout;
-
-    setupDefaultAnvilPluggableUI(anvilModule);
-
-    return anvilModule;
 }
 
 function setupAppSourceCode() {
@@ -157,15 +90,27 @@ function setupAppSourceCode() {
 
 window.anvilFormTemplates = [];
 
+const TEMPLATE_MODULE_BODY = `function $builtinmodule(mod) {
+    mod.__getattr__ = new Sk.builtin.func(function (pyName) {
+        // runtime error because attribute error loses the argument as it propagates in skulpt
+        throw new Sk.builtin.RuntimeError("_anvil_designer module missing attribute '" + pyName + "', did you manually change the import statement?");
+    });
+
+    return Sk.misceval.chain(null,
+        /*INSERT*/
+        () => mod
+    );
+};`;
+
 function setupAppTemplates(
     yaml: AppYaml | DependencyYaml,
     depAppId: string | null,
     appPackage: string,
     anvilModule: PyModMap
 ) {
-    const templates = {} as PyModMap;
+    const templateMakers = {} as Record<string, () => Suspension | pyObject>;
 
-    for (const form of yaml.forms || []) {
+    for (const form of yaml.forms ?? []) {
         // In newer (v2+) apps, we build an "_anvil_designer" module in each package with the form
         // templates in. Because Skulpt doesn't know how to load prebuilt module objects as children of
         // parsed-and-compiled packages, we create it in the grossest way you can think of:
@@ -181,21 +126,28 @@ function setupAppTemplates(
         const packagePath = dots.join("/") + (dots.length ? "/" : "");
 
         const templateModulePath = `app/${appPackage}/${packagePath}_anvil_designer.js`;
-        const templateModule =
-            skulptFiles[templateModulePath] || "function $builtinmodule(mod) { /*INSERT*/ return mod; };";
+        const templateModule = skulptFiles[templateModulePath] ?? TEMPLATE_MODULE_BODY;
         //@ts-ignore nasty way to communicate with generated JS
         const aft = window.anvilFormTemplates;
         skulptFiles[templateModulePath] = templateModule.replace(
             /\/\*INSERT\*\//,
-            `/*INSERT*/ mod['${className}Template'] = window.anvilFormTemplates[${aft.length}];`
+            `/*INSERT*/ window.anvilFormTemplates[${aft.length}], (template) => { mod['${className}Template'] = template; },`
         );
 
-        const pyTemplateClass = createFormTemplateClass(form, depAppId, className, anvilModule);
-        aft[aft.length] = pyTemplateClass;
-        templates[`${className}Template`] = pyTemplateClass;
+        const pyTemplateClassMaker = () =>
+            createFormTemplateClass(
+                form,
+                depAppId,
+                className,
+                anvilModule,
+                `${appPackage}.${packageName}._anvil_designer`
+            );
+        aft[aft.length] = pyTemplateClassMaker;
+        templateMakers[`${className}Template`] = pyTemplateClassMaker;
     }
+    //console.log("Done creating template classes")
     if ((yaml.runtime_options?.version || 0) < 2) {
-        setupLegacyV1AnvilModule(anvilModule, appPackage, templates);
+        setupLegacyV1AnvilModule(anvilModule, appPackage, templateMakers);
     }
 }
 
@@ -216,6 +168,7 @@ export async function setupPythonEnvironment() {
         read: builtinRead,
         syspath: ["app", "anvil-services"],
         __future__: data.app.runtime_options?.client_version == "3" ? Sk.python3 : Sk.python2,
+        suspensionHandlers: PyDefUtils.suspensionHandlers,
         ...extraOptions,
     });
     Sk.importSetUpPath(); // This is hack - normally happens automatically on first import

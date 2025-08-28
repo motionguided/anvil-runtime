@@ -12,7 +12,7 @@ import {
     toJs,
     toPy,
     typeLookup,
-} from "../../@Sk";
+} from "@Sk";
 import {
     Component,
     ComponentConstructor,
@@ -21,7 +21,7 @@ import {
     PropertyDescription,
 } from "../../components/Component";
 import { Container } from "../../components/Container";
-import { suspensionFromPromise } from "../../PyDefUtils";
+import PyDefUtils from "PyDefUtils";
 import { designerApi } from "../component-designer-api";
 import { initNativeSubclass, kwsToJsObj, s_raise_event } from "../py-util";
 import { registerModule } from "./common";

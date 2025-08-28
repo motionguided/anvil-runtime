@@ -2,7 +2,7 @@
 
 import { getUnsetSpacing, setElementMargin, setElementPadding } from "@runtime/runner/components-in-js/public-api/property-utils";
 
-var PyDefUtils = require("PyDefUtils");
+import PyDefUtils from "PyDefUtils";
 import { getCssPrefix, getInlineStyles } from "@runtime/runner/legacy-features";
 import { setHandled } from "./events";
 
@@ -18,13 +18,11 @@ description: |
 
   A checkbox allows a boolean choice - on or off.
 
-  ![Screenshot](img/screenshots/checkboxes.png)
-
 prop_groups: [interaction, size, text, appearance]
 extra_props: [checked]
 */
 
-module.exports = (pyModule) => {
+const CheckBox = (pyModule) => {
     const { isTrue } = Sk.misceval;
     const inlineStyle = getInlineStyles("checkbox");
 
@@ -184,6 +182,9 @@ module.exports = (pyModule) => {
         },
     });
 };
+
+export default CheckBox;
+
 /*!defClass(anvil,CheckBox,Component)!*/
 
 /*

@@ -83,7 +83,7 @@ def run_ps2pdf(quality, infile, outfile):
                     # Add a /tmp filesystem
                     "-t",
                     # Mount in system files ps2pdf needs
-                    "-b", "/usr", "-b", "/bin", "-b", "/lib", "-b", "/lib64", "-b", "/etc", "-b", "/dev/urandom",
+                    "-b", "/usr", "-b", "/bin", "-b", "/lib", "-b", "/lib64", "-b", "/etc", "-b", "/dev/urandom", "-b", "/var/lib/ghostscript",
                     # Only permit a few system calls
                     "-S", anvil_downlink_host.__path__[0]+"/ps2pdf-seccomp.policy",
                     # Mount in the files (only the output is writable)

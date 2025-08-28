@@ -10,8 +10,8 @@ def _replace(s, pattern, replacement):
 
 
 class PhoneNumberValidator(object):
-    def __init__(self):
-        self.box = pluggable_ui['anvil.TextBox'](type="tel")
+    def __init__(self, **properties):
+        self.box = pluggable_ui['anvil.TextBox'](type="tel", **properties)
         self.valid_number = None
         self.box.add_event_handler("focus", self.on_focus)
         self.box.add_event_handler("lost_focus", self.on_blur)
@@ -172,7 +172,7 @@ else:
 
                 elif selected_mfa_type == "twilio-verify":
                     if not mfa_methods.get('twilio-verify'):
-                        phone_box = PhoneBoxValidator(placeholder="Enter your phone number", align="center")
+                        phone_box = PhoneNumberValidator(placeholder="Enter your phone number", align="center")
                         phone_box.box.add_event_handler("pressed_enter", lambda **e: mfa_panel.raise_event("x-close-alert"))
                         #phone_box.box.add_event_handler("lost_focus", lambda **e: print(phone_box.valid_number))
                         #mfa_panel.add_component(Label(text="Enter your phone number", align="center"))

@@ -25,7 +25,7 @@ import {
     throwNonStrKey,
     throwSerializationError,
 } from "./helpers";
-import { SerializationInfo } from "./serialization-info";
+import { SerializationInfo, getPortableClassSerializationInfo, getPortableClassTypeName } from "./serialization-info";
 import type {
     BlobContent,
     Capability,
@@ -49,10 +49,16 @@ function pathPushPop(key: string | number, val: any, path: Path, nonJson: NonJso
 }
 
 function serializePortableClass(obj: any, path: Path, nonJson: NonJson[], serializationInfo: SerializationInfo) {
-    const cls = obj.ob$type;
-    const typeName = cls.anvil$serializableName;
+    const [pyTypeName, pyClass] = getPortableClassSerializationInfo(obj);
+    const typeName = pyTypeName?.toString() ?? null;
+    const validTypeName = typeName && typeName in pyValueTypes;
 
-    if (!typeName || !(typeName in pyValueTypes)) {
+    if (validTypeName && obj === pyClass) {
+        nonJson.push({ path: path.slice(0), value: obj });
+        return null;
+    }
+
+    if (!validTypeName || obj.ob$type !== pyClass) {
         const name = obj.tp$name ?? "[unknown]";
         const msg = `Type ${name} is not registered with @anvil.server.portable_class.`;
         throw pyCall(anvilServerMod["SerializationError"], [new pyStr(msg)]);
@@ -72,13 +78,14 @@ function serializePortableClass(obj: any, path: Path, nonJson: NonJson[], serial
 }
 
 function remapToJsAndPushNonJson(obj: any, path: Path, nonJson: NonJson[], serializationInfo: SerializationInfo): any {
-    if (obj?.ob$type?.anvil$serializableName) {
+    if (getPortableClassTypeName(obj)) {
         return serializePortableClass(obj, path, nonJson, serializationInfo);
     }
-    const maybeJs = obj.valueOf();
+    const maybeJs = obj?.valueOf();
     const jsType = typeof maybeJs;
 
-    if (maybeJs === null) {
+    if (maybeJs === null || maybeJs === undefined) {
+        // probably the right thing to do here
         return null;
     } else if (jsType === "number" && Number.isFinite(maybeJs)) {
         return maybeJs;
@@ -252,7 +259,8 @@ function remapNonJsonTypes(
                 cls = mapping.value;
                 type = "ClassType";
             }
-            const typeName = cls.anvil$serializableName;
+            const pyTypeName = getPortableClassTypeName(cls);
+            const typeName = pyTypeName?.toString() ?? null;
             if (typeName) {
                 call.objects.push({
                     path: mapping.path,

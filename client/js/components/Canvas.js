@@ -1,7 +1,7 @@
 "use strict";
 
-var PyDefUtils = require("PyDefUtils");
-const { PostponedResizeObserver } = require("../utils");
+import PyDefUtils from "PyDefUtils";
+import { PostponedResizeObserver } from "../utils";
 
 /*#
 id: canvas
@@ -205,7 +205,7 @@ description: |
 
      Draw an image (represented by a Media object) at position (x,y). Optionally specify width and height. If (x,y) is not specified, draws at (0,0).
 
-  \* <code>draw_image(<i>image_media</i>, <i>sx</i>, <i>sy</i>, <i>s_width</i>, <i>s_height</i>, <i>dx</i>, <i>dy</i>, <i>d_width</i>, <i>d_height</i>)</code>
+  \* <code>draw_image_part(<i>image_media</i>, <i>sx</i>, <i>sy</i>, <i>s_width</i>, <i>s_height</i>, <i>dx</i>, <i>dy</i>, <i>d_width</i>, <i>d_height</i>)</code>
 
      Draw a part of an image (specifically the `s_width`x`s_height` rectangle whose top-left corner is at (`sx`,`sy`)) into a `d_width`x`d_height` rectangle whose top-left corner is at (`dx`,`dy`)).
 
@@ -229,7 +229,7 @@ description: |
 
 */
 
-module.exports = function(pyModule) {
+const Canvas = (pyModule) => {
     function resetContext(self, raiseEvent = true) {
         self._anvil.element.attr("width", self._anvil.element.width());
         self._anvil.element.attr("height", self._anvil.element.height());
@@ -752,6 +752,9 @@ module.exports = function(pyModule) {
         },
     });
 };
+
+export default Canvas;
+
 /*!defClass(anvil,Canvas,Component)!*/
 
 /*

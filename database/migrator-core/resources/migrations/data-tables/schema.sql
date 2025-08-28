@@ -1,6 +1,9 @@
 -- This is the schema that will set up a new Postgres data-tables database for an Anvil server
 -- This is required for data tables dbs, dedicated dbs, and combined central dbs. 
 -- Central db's being run along side a data tables db, do not include this schema.
+-- This file is not used by the migrator, but is guaranteed to be correct
+-- by the `platform/database/migrator/tests/check_migrations.py` script.
+
 -- DO NOT run this to upgrade an existing server.
 
 CREATE TABLE app_storage_tables (id integer primary key, 
@@ -14,7 +17,7 @@ CREATE TABLE app_storage_access (table_id integer references app_storage_tables(
 
 ALTER TABLE app_storage_access ADD CONSTRAINT app_storage_access_unique_table_id UNIQUE(table_id);
 
-CREATE TABLE app_storage_data (id serial, 
+CREATE TABLE app_storage_data (id bigserial, 
                                table_id integer references app_storage_tables(id), 
                                data jsonb NOT NULL DEFAULT '{}');
 CREATE INDEX app_storage_data_idx ON app_storage_data (table_id,id);
@@ -23,7 +26,7 @@ CREATE INDEX app_storage_data_json_idx ON app_storage_data using gin (data jsonb
 CREATE TABLE app_storage_media (object_id integer PRIMARY KEY NOT NULL,
                                 content_type text,
                                 name text,
-                                row_id integer,
+                                row_id bigint,
                                 table_id integer,
                                 column_id text,
                                 data bytea);

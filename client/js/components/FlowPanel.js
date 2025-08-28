@@ -1,13 +1,12 @@
 "use strict";
 
-import {getSpacingStyles, setElementSpacing} from "@runtime/runner/components-in-js/public-api/property-utils";
-
-var PyDefUtils = require("PyDefUtils");
-import { validateChild } from "./Container";
+import { pyNone, toJs, toPy } from "@Sk";
+import { setElementSpacing } from "@runtime/runner/components-in-js/public-api/property-utils";
 import { getCssPrefix } from "@runtime/runner/legacy-features";
+import { indexInRange, validateChild } from "./Container";
 import { isInvisibleComponent } from "./helpers";
-import {pyNone, toJs, toPy} from "@Sk";
-import {data} from "@runtime/runner/data";
+
+import PyDefUtils from "PyDefUtils";
 
 /*#
 id: flowpanel
@@ -46,7 +45,7 @@ description: |
   Index 0 is the first element in the panel, 1 is the second, etc.
 */
 
-module.exports = (pyModule) => {
+const FlowPanel = (pyModule) => {
 
     const GAP_VALUES = ["none", "tiny", "small", "medium", "large", "huge"];
 
@@ -161,7 +160,7 @@ module.exports = (pyModule) => {
         element({ align, spacing, gap, vertical_align, ...props }) {
             const prefix = getCssPrefix();
 
-            let gapClass = "flow-spacing-medium";
+            let gapClass = prefix + "flow-spacing-medium";
             const spacingJs = toJs(spacing);
             const actualGapJs = toJs(gap) ?? spacingJs;
             if (GAP_VALUES.includes(actualGapJs)) {
@@ -206,7 +205,8 @@ module.exports = (pyModule) => {
             /*!defMethod(_,component,[index=],[width=],[expand=])!2*/ "Add a component to this panel. Optionally specify the position in the panel to add it, or the width to apply to components that can't self-size width-wise."
             $loc["add_component"] = PyDefUtils.funcWithKwargs(function (kwargs, self, component) {
                 validateChild(component);
-                const { index: idx, expand = false } = kwargs;
+                let { index: idx, expand = false } = kwargs;
+                idx = indexInRange(idx, self);
 
                 return Sk.misceval.chain(
                     component.anvil$hooks.setupDom(),
@@ -218,7 +218,7 @@ module.exports = (pyModule) => {
                         const width = domNode.classList.contains("anvil-inlinable") ? "" : kwargs["width"] || "auto";
                         const [containerElement] = <ContainerElement width={width} expand={expand} />;
                         containerElement.appendChild(domNode);
-                        if (typeof idx === "number" && idx < gutter.children.length) {
+                        if (typeof idx === "number") {
                             gutter.insertBefore(containerElement, gutter.children[idx]);
                             // fall through
                         } else {
@@ -241,3 +241,5 @@ module.exports = (pyModule) => {
 };
 
 /*!defClass(anvil,FlowPanel,Container)!*/
+
+export default FlowPanel;

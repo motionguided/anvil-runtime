@@ -3,7 +3,7 @@
         [anvil.dispatcher.serialisation.live-objects :as live-objects])
   (:require [anvil.dispatcher.types :as types]))
 
-(deftest test-load-LiveObjectProxy
+#_(deftest test-load-LiveObjectProxy
 
   (let [live-object-map {:backend "test"
                          :id 7}

@@ -4,9 +4,9 @@ See animate.css v3.5.1
 https://github.com/animate-css/animate.css/blob/3.5.1/animate.css
 */
 
-@import "variables.scss";
+@use "variables.scss";
 
-.#{$prefix}animated {
+.#{variables.$prefix}animated {
     -webkit-animation-duration: .3s;
     animation-duration: .3s;
     /* Originally 1s */
@@ -14,8 +14,8 @@ https://github.com/animate-css/animate.css/blob/3.5.1/animate.css
     animation-fill-mode: both;
 }
 
-$fadeInDown: "#{$prefix}fadeInDown";
-$fadeOutUp: "#{$prefix}fadeOutUp";
+$fadeInDown: "#{variables.$prefix}fadeInDown";
+$fadeOutUp: "#{variables.$prefix}fadeOutUp";
 
 @-webkit-keyframes #{$fadeInDown} {
     from {

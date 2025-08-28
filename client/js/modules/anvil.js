@@ -7,27 +7,33 @@ import { getCssPrefix } from "@runtime/runner/legacy-features";
 import { warn } from "@runtime/runner/warnings";
 import {
     chainOrSuspend,
+    checkArgsLen,
+    checkNone,
+    copyKeywordsToNamedArgs,
     promiseToSuspension,
     pyCall,
     pyCallOrSuspend,
+    pyFalse,
     pyFunc,
     pyInt,
     pyNone,
+    pyRuntimeError,
     pyStr,
+    pyTrue,
     pyValueError,
     toJs,
     toPy,
 } from "@Sk";
-import { asyncToPromise } from "PyDefUtils";
 import { notifyComponentMounted, notifyComponentUnmounted } from "../components/Component";
-import { anvilServerMod, kwsToObj, pyPropertyFromGetSet, s_clear, s_slots } from "../runner/py-util";
+import { anvilServerMod, funcFastCall, kwsToObj, objToKws, pyPropertyFromGetSet, s_clear, s_refresh_data_bindings, s_slots } from "../runner/py-util";
 import { defer, getRandomStr } from "../utils";
 import Modal, { BOOTSTRAP_MODAL_BG } from "./modal";
+import PyDefUtils from "PyDefUtils";
+import * as b64 from "../lib/b64";
 
-module.exports = function(appOrigin, uncaughtExceptions) {
+function anvil(appOrigin, uncaughtExceptions) {
 
-	var PyDefUtils = require("PyDefUtils");
-
+    /** @type {import("../runner/py-util").PyModMap} */
     var pyModule = {
         "__name__": new Sk.builtin.str("anvil"),
         "__path__": new Sk.builtin.tuple([new Sk.builtin.str("anvil-services/anvil"),new Sk.builtin.str("src/lib/anvil")]),
@@ -140,7 +146,11 @@ module.exports = function(appOrigin, uncaughtExceptions) {
 
     const _environmentClass = Sk.abstr.buildNativeClass("anvil.AppInfo.Environment", {
         constructor: function Environment(data) {
-            this.data = window.anvilAppInfo.environment;
+            if (ANVIL_IN_DESIGNER) {
+                this.data = { description: "Designer", tags: ["debug"] }
+            } else {
+                this.data = window.anvilAppInfo.environment;
+            }
         },
         slots: {
             $r() {
@@ -236,9 +246,9 @@ module.exports = function(appOrigin, uncaughtExceptions) {
 
     var appInfoClass = Sk.misceval.buildClass(pyModule, function($gbl, $loc) {
         $loc["__getattr__"] = new Sk.builtin.func(function(self, pyAttrName) {
-            var attrName = Sk.ffi.remapToJs(pyAttrName);
+            var attrName = toJs(pyAttrName);
             if (Object.prototype.hasOwnProperty.call(window.anvilAppInfo, attrName)) {
-                return new Sk.ffi.remapToPy(window.anvilAppInfo[attrName]);
+                return toPy(window.anvilAppInfo[attrName]);
             }
             throw new Sk.builtin.AttributeError(pyAttrName);
         });
@@ -257,7 +267,16 @@ module.exports = function(appOrigin, uncaughtExceptions) {
         $loc["environment"] = new pyPropertyFromGetSet((self) => {
             return self._environment || (self._environment = new _environmentClass());
         });
-        $loc["get_client_config"] = new Sk.builtin.func(function(self, pyPackageName) {
+
+        /*!defMethod(_,[package_name])!2*/ "Get the client config for the specified package. If no package name is specified, the client config for the current app is returned.";
+        $loc["get_client_config"] = funcFastCall(function (args, kws) {
+            const [self, pyPackageName] = copyKeywordsToNamedArgs(
+                "get_client_config",
+                [null, "package_name"],
+                args,
+                kws,
+                [pyNone]
+            );
             const packageName = toJs(pyPackageName);
             try {
                 return toPy(getClientConfig(packageName));
@@ -265,6 +284,11 @@ module.exports = function(appOrigin, uncaughtExceptions) {
                 throw new pyValueError(e.message);
             }
         });
+        /*!defMethod(_,[package_name])!2*/ "Get the server config for the specified package. If no package name is specified, the server config for the current app is returned.";
+        $loc["get_server_config"] = funcFastCall(function(args, kws) {
+            throw new pyRuntimeError("get_server_config is not available in the client");
+        });
+        $loc["package_name"] = pyPropertyFromGetSet(() => toPy(window.anvilAppMainPackage));
 
         [/*!defAttr()!1*/ {
             name: "id",
@@ -274,7 +298,11 @@ module.exports = function(appOrigin, uncaughtExceptions) {
             name: "branch",
             type: "string",
             description: "The Git branch from which the current app is being run. This is 'master' for development apps or apps without a published version, and 'published' if this app is being run from its published version.",
-        },];
+        },/*!defAttr()!1*/ {
+            name: "package_name",
+            type: "string",
+            description: "The package name of this app",
+        }];
         /*!defClass(anvil,#AppInfo)!*/
 
     }, "AnvilAppInfo", []);
@@ -354,9 +382,14 @@ module.exports = function(appOrigin, uncaughtExceptions) {
                             }
                             // Any remaining oldFormKwargs indicate properties that should be reset to their default value
                             for (const k of Object.keys(oldFormKwargs)) {
-                                yield () => Sk.abstr.sattr(pyLayout, new pyStr(k), pyLayout.anvil$customPropsDefaults[k], true);
+                                yield () => Sk.abstr.sattr(pyLayout, new pyStr(k), toPy(pyLayout.anvil$customPropsDefaults[k]), true);
                             }
                         })(),
+
+
+                        // now that the properties have been set, refresh data bindings
+                        () => pyLayout.tp$getattr(s_refresh_data_bindings, true),
+                        (rdbMethod) => rdbMethod && pyCallOrSuspend(rdbMethod),
 
                         // Dissociate from the old form
                         () => oldForm._withLayout.onDissociate?.(pyLayout, oldForm),
@@ -654,7 +687,6 @@ module.exports = function(appOrigin, uncaughtExceptions) {
             } else {
                 jsstr = self._data;
             }
-            var b64 = require("../lib/b64");
             return new Sk.builtin.str("data:" + self._contentType.replace(/;/g, "") + ";base64," + b64.base64EncStr(jsstr));
         });
 
@@ -1023,7 +1055,7 @@ module.exports = function(appOrigin, uncaughtExceptions) {
             body = true;
             validateChild(content, "alert");
         } else if (content) {
-            body = content.toString();
+            body = checkNone(content) ? null : content.toString();
         }
 
         buttons = buttons.map((pyBtnArg) => {
@@ -1074,7 +1106,7 @@ module.exports = function(appOrigin, uncaughtExceptions) {
         const showFns = [];
 
         if (pyForm) {
-            const formElement = await asyncToPromise(() => pyForm.anvil$hooks.setupDom());
+            const formElement = await PyDefUtils.asyncToPromise(() => pyForm.anvil$hooks.setupDom());
             a.elements.modalBody.append(formElement);
             // use set_event_handler - we want to reset this event if the same form
             // is added to a modal multiple times
@@ -1101,7 +1133,7 @@ module.exports = function(appOrigin, uncaughtExceptions) {
                 $(pyForm.anvil$hooks.domElement).detach();
                 topLevelForms.alertForms.delete(pyForm);
             }
-            asyncToPromise(() => chainOrSuspend(null, ...hideFns)).then(() => resolveReturnValue(returnValue));
+            PyDefUtils.asyncToPromise(() => chainOrSuspend(null, ...hideFns)).then(() => resolveReturnValue(returnValue));
         });
 
         a.once("show", async () => {
@@ -1113,7 +1145,7 @@ module.exports = function(appOrigin, uncaughtExceptions) {
                 // it's possible for hide to be called before shown
                 topLevelForms.alertForms.add(pyForm);
             }
-            await asyncToPromise(() => chainOrSuspend(null, ...showFns));
+            await PyDefUtils.asyncToPromise(() => chainOrSuspend(null, ...showFns));
         });
 
         await a.show();
@@ -1203,30 +1235,51 @@ module.exports = function(appOrigin, uncaughtExceptions) {
       The alert will close and return the value `42`.
     */
 
-    /*!defFunction(anvil,_,content,[title=""],[buttons=],[large=False],[dismissible=True],[role=])!2*/ "Pop up an alert box. By default, it will have a single \"OK\" button which will return True when clicked."
-    pyModule["alert"] = new Sk.builtin.func(PyDefUtils.withRawKwargs(function(pyKwarray, pyContent) {
-        const kwargs = PyDefUtils.keywordArrayToHashMap(pyKwarray);
-        kwargs.content ??= pyContent;
-        kwargs.dismissible ??= true;
-        kwargs.buttons = kwargs.buttons || Sk.ffi.toPy([
-            ["OK", true, "success"],
-        ]);
+    const defaultAlertButtons = toPy([["OK", true, "success"]]);
+    const defaultConfirmButtons = toPy([
+        ["Cancel", false, "danger"],
+        ["OK", true, "success"],
+    ]);
 
+    const s_modal = new pyStr("anvil.modal");
+
+    function cleanModalArgs(args, kws) {
+        const kwargs = kwsToObj(kws);
+        kwargs.content ??= args[0] ?? pyNone;
+        return kwargs;
+    }
+
+    function callPluggableUiModal(kwargs) {
+        const pluggable_ui = pyModule["pluggable_ui"];
+        const modal = pluggable_ui.mp$subscript(s_modal);
+        return pyCallOrSuspend(modal, [], objToKws(kwargs));
+    }
+
+    /* This is the pluggable ui implementation */
+    pyModule["modal"] = funcFastCall(function (args, kws) {
+        if (ANVIL_IN_DESIGNER) {
+            throw new pyRuntimeError("alerts are not available in the Designer");
+        }
+        checkArgsLen("modal", args, 0, 1);
+        const kwargs = cleanModalArgs(args, kws);
         return PyDefUtils.suspensionFromPromise(modal(kwargs));
-    }));
+    });
 
-    /*!defFunction(anvil,_,content,[title=""],[buttons=],[large=False],[dismissible=False], [role=])!2*/ "Pop up a confirmation box. By default, it will have \"Yes\" and \"No\" buttons which will return True and False respectively when clicked."
-    pyModule["confirm"] = new Sk.builtin.func(PyDefUtils.withRawKwargs(function(pyKwarray, pyContent) {
-        const kwargs = PyDefUtils.keywordArrayToHashMap(pyKwarray);
-        kwargs.content ??= pyContent;
-        kwargs.buttons ??= Sk.ffi.toPy([
-            ["No", false, "danger"],
-            ["Yes", true, "success"],
-        ]);
-        kwargs.dismissible ??= false;
+    /*!defFunction(anvil,_,content,[title=""],[buttons=],[large=False],[dismissible=True],[role=])!2*/ ('Pop up an alert box. By default, it will have a single "OK" button which will return True when clicked.');
+    pyModule["alert"] = funcFastCall((args, kws) => {
+        const kwargs = cleanModalArgs(args, kws);
+        kwargs.dismissible ??= pyTrue;
+        kwargs.buttons ??= defaultAlertButtons;
+        return callPluggableUiModal(kwargs);
+    });
 
-        return PyDefUtils.suspensionFromPromise(modal(kwargs));
-    }));
+    /*!defFunction(anvil,_,content,[title=""],[buttons=],[large=False],[dismissible=False], [role=])!2*/ ('Pop up a confirmation box. By default, it will have "Yes" and "No" buttons which will return True and False respectively when clicked.');
+    pyModule["confirm"] = funcFastCall((args, kws) => {
+        const kwargs = cleanModalArgs(args, kws);
+        kwargs.dismissible ??= pyFalse;
+        kwargs.buttons ??= defaultConfirmButtons;
+        return callPluggableUiModal(kwargs);
+    });
 
 
     /*#
@@ -1380,3 +1433,5 @@ module.exports = function(appOrigin, uncaughtExceptions) {
 
     return pyModule;
 };
+
+export default anvil;

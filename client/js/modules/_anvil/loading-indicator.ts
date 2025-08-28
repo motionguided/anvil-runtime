@@ -2,7 +2,7 @@ import { buildNativeClass, checkArgsLen, pyCall, pyCallOrSuspend, pyNewableType,
 import { SpinnerLoader, appendSvgSpinner, getBodySpinner } from "@runtime/runner/loading-spinner";
 import { anvilJsMod, kwsToJsObj } from "@runtime/runner/py-util";
 import { globalSuppressLoading } from "@runtime/utils";
-import { cssLength } from "PyDefUtils";
+import PyDefUtils from "PyDefUtils";
 
 // Transparent overlay prevents clicking
 const OVERLAY = document.createElement("div");
@@ -26,7 +26,7 @@ function getOrCreateOverlay(target: HTMLElement, opts: Record<string, any>) {
 
     const styleMinHeight = target.style.minHeight;
     if (opts.min_height) {
-        target.style.minHeight = cssLength(opts.min_height);
+        target.style.minHeight = PyDefUtils.cssLength(opts.min_height);
     }
     const height = target.clientHeight;
     const minSize = Math.max(50, Math.min(height, target.clientWidth));

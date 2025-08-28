@@ -167,7 +167,7 @@
       (into {} (for [[k v] ic] [(name k) v]))
       ic)))
 
-(def link-types #{"link-single" "link-multiple"})
+(def link-types #{"link_single" "link_multiple"})
 
 ;; we need to remove linked columns since the linked column values are integer pointers
 ;; sending linked columns as part of the update would be a bad idea
@@ -182,7 +182,7 @@
 (comment
   ;; {"a" 1 "e" 5}
   (map-from-compact [1 4 5 "CAP"]
-                    [{:name "a"} {:name "b"} {:name "c"} {:name "d" :type "link-single"} {:name "e"} {:name "f"}]
+                    [{:name "a"} {:name "b"} {:name "c"} {:name "d" :type "link_single"} {:name "e"} {:name "f"}]
                     [1 0 0 1 1 0])
 
   ;

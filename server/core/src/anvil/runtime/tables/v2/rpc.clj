@@ -5,6 +5,7 @@
     [anvil.dispatcher.types :as types]
     [anvil.runtime.tables.util :as old-tables-util]
     [anvil.runtime.tables.v2.basic-ops :as basic-ops]
+    [anvil.runtime.tables.v2.jdbc-trace :as jdbc-t]
     [anvil.runtime.tables.v2.search :as search-v2]
     [anvil.runtime.tables.v2.updates :as updates]
     [anvil.runtime.tables.v2.csv :as csv]
@@ -216,45 +217,60 @@
     (when row-id
       [row-id table-data])))
 
-(defn table-add-rows [_kw table-cap rows]
-  (let [tables (util-v2/get-tables)
-        [encoded-view-spec] (unwrap-cap-with-perm! tables table-cap :table util-v2/WRITE)
-        {table-id :id :keys [perm cols] :as view-spec} (decode-view-spec encoded-view-spec)
-        new-row-ids (updates/do-insert! (db) (quota-ctx) (can-auto-create?) tables view-spec rows)]
-    [(for [row-id new-row-ids]
-       [row-id (types/->Capability ["_" "t" encoded-view-spec {:r row-id}])])
-     (basic-ops/get-table-spec table-id tables perm nil cols)]))
+(defn table-add-rows
+  ([_kw table-cap rows] (table-add-rows _kw table-cap rows false))
+  ([_kw table-cap rows treat-as-client-request?]
+   (let [tables (util-v2/get-tables)
+         [encoded-view-spec] (unwrap-cap-with-perm! tables table-cap :table util-v2/WRITE treat-as-client-request?)
+         {table-id :id :keys [perm cols] :as view-spec} (decode-view-spec encoded-view-spec)
+         new-row-ids (updates/do-insert! (db) (quota-ctx) (can-auto-create?) tables view-spec rows)]
+     [(for [row-id new-row-ids]
+        [row-id (types/->Capability ["_" "t" encoded-view-spec {:r row-id}])])
+      (basic-ops/get-table-spec table-id tables perm nil cols)])))
 
-(defn table-add-row [_kws table-cap row]
-  (let [[[[row-id cap]] table-spec] (table-add-rows _kws table-cap [row])]
-    [row-id cap table-spec]))
+(defn table-add-row
+  ([_kws table-cap row] (table-add-row _kws table-cap row false))
+  ([_kws table-cap row treat-as-client-request?]
+   (let [[[[row-id cap]] table-spec] (table-add-rows _kws table-cap [row] treat-as-client-request?)]
+     [row-id cap table-spec])))
 
-(defn row-update [_kw row-cap values]
-  (let [tables (util-v2/get-tables)
-        [encoded-view-spec encoded-search-spec] (unwrap-cap-with-perm! tables row-cap :row util-v2/WRITE)
-        {row-id :r} (decode-search-spec encoded-search-spec)]
-    (updates/do-update! (db) (quota-ctx) (can-auto-create?) tables (decode-view-spec encoded-view-spec) [{:row-id row-id :values values}])
-    nil))
+(defn row-update
+  ([_kw row-cap values] (row-update _kw row-cap values false))
+  ([_kw row-cap values treat-as-client-request?]
+   (let [tables (util-v2/get-tables)
+         [encoded-view-spec encoded-search-spec] (unwrap-cap-with-perm! tables row-cap :row util-v2/WRITE treat-as-client-request?)
+         {row-id :r} (decode-search-spec encoded-search-spec)]
+     (updates/do-update! (db) (quota-ctx) (can-auto-create?) tables (decode-view-spec encoded-view-spec) [{:row-id row-id :values values}])
+     nil)))
 
-(defn row-batch-update [_kw updates]
+(defn row-batch-update [_kws updates]
   (let [tables (util-v2/get-tables)
-        all-updates (->> (for [[row-cap update] updates
-                               :let [[encoded-view-spec encoded-search-spec] (unwrap-cap-with-perm! tables row-cap :row util-v2/WRITE)
+        all-updates (->> (for [[row-cap update treat-as-client-request?] updates
+                               :let [[encoded-view-spec encoded-search-spec] (unwrap-cap-with-perm! tables row-cap :row util-v2/WRITE treat-as-client-request?)
                                      {row-id :r} (decode-search-spec encoded-search-spec)]]
                            {:view-spec (decode-view-spec encoded-view-spec) :row-id row-id :values update})
                          (group-by :view-spec))]
     (doseq [[view-spec updates] all-updates]
       (updates/do-update! (db) (quota-ctx) (can-auto-create?) tables view-spec updates))))
 
-(defn row-batch-delete [_kw row-caps]
+(defn row-batch-delete-2 [_kw row-caps]
   (let [tables (util-v2/get-tables)
-        all-deletions (->> (for [row-cap row-caps
-                                 :let [[encoded-view-spec encoded-search-spec] (unwrap-cap-with-perm! tables row-cap :row util-v2/WRITE)
+        all-deletions (->> (for [[row-cap treat-as-client-request?] row-caps
+                                 :let [[encoded-view-spec encoded-search-spec] (unwrap-cap-with-perm! tables row-cap :row util-v2/WRITE treat-as-client-request?)
                                        {row-id :r} (decode-search-spec encoded-search-spec)]]
                              {:view-spec (decode-view-spec encoded-view-spec), :row-id row-id})
                            (group-by :view-spec))]
     (doseq [[view-spec deletions] all-deletions]
       (updates/do-delete! (db) (quota-ctx) tables view-spec (map :row-id deletions)))))
+
+(defn row-batch-delete-1 [_kw row-caps]
+  "A compatibility shim for pre-models code that doesn't know to pass [row-cap treat-as-client-request?] pairs"
+  (row-batch-delete-2 _kw (for [rc row-caps] [rc false])))
+
+(defn row-delete
+  ([_kws row-cap] (row-delete _kws row-cap false))
+  ([_kws row-cap treat-as-client-request?]
+   (row-batch-delete-2 _kws [[row-cap treat-as-client-request?]])))
 
 (defn do-row-fetch [tables {table-id :id :keys [cols] :as view-spec} row-id requested-cols]
   (let [{:keys [table-data primary-row-ids]} (basic-ops/get-row tables (db) view-spec row-id requested-cols)]
@@ -294,7 +310,7 @@
                            (decode-view-spec))
         row-id (basic-ops/validate-clean-row-id row-id table-id)]
     (boolean (when row-id
-               (seq (jdbc/query (db) ["SELECT 1 FROM app_storage_data WHERE table_id=? AND id=?" table-id row-id]))))))
+               (seq (jdbc-t/query (db) ["SELECT 1 FROM app_storage_data WHERE table_id=? AND id=?" table-id row-id]))))))
 
 (defn- get-csv-lazy-media [tables {table-id :id :keys [cols restrict] :as _view-spec} query escape-for-excel?]
   (let [cols (or cols (keys (get-in tables [table-id :columns])))
@@ -371,8 +387,9 @@
    "anvil.private.tables.v2.row.can_auto_create"   (wrap-native-fn (fn [_kws] (can-auto-create?)))
    "anvil.private.tables.v2.row.fetch"             (wrap-native-fn row-fetch)
    "anvil.private.tables.v2.row.update"            (wrap-native-fn row-update)
-   "anvil.private.tables.v2.row.batch_delete"      (wrap-native-fn row-batch-delete)
-   "anvil.private.tables.v2.row.delete"            (wrap-native-fn (fn [_kws row-cap] (row-batch-delete _kws [row-cap])))
+   "anvil.private.tables.v2.row.batch_delete"      (wrap-native-fn row-batch-delete-1)
+   "anvil.private.tables.v2.row.batch_delete_2"    (wrap-native-fn row-batch-delete-2)
+   "anvil.private.tables.v2.row.delete"            (wrap-native-fn row-delete)
    "anvil.private.tables.v2.row.batch_update"      (wrap-native-fn row-batch-update)
 
    "anvil.record_schema.get/anvil.tables"          (wrap-native-fn get-table-schema)})
